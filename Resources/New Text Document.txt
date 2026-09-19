@@ -1,0 +1,5 @@
+https://medium.com/@amit25173/opencv-eye-tracking-aeb4f1b46aa3
+
+https://docs.opencv.org/3.4.11/dd/d43/tutorial_py_video_display.html
+
+https://stackoverflow.com/questions/41333888/detect-open-or-closed-eye-using-opencv-in-python

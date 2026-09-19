@@ -1,0 +1,26 @@
+# Python environments and caches
+.venv/
+.venv-*/
+__pycache__/
+*.py[cod]
+
+# IDE settings
+.idea/
+.vscode/
+
+# PyInstaller output
+build/
+dist/
+*.spec.bak
+
+# Local recordings and other generated media
+*.wav
+*.avi
+*.mp4
+
+# Downloaded model weights (large and subject to their own license)
+models/
+
+# Local configuration and secrets
+.env
+.env.*
