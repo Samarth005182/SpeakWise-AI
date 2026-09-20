@@ -17,6 +17,7 @@ dist/
 *.wav
 *.avi
 *.mp4
+recordings/
 
 # Downloaded model weights (large and subject to their own license)
 models/

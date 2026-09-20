@@ -2,7 +2,7 @@ import sounddevice as sd
 from scipy.io.wavfile import write
 
 
-def record_audio(duration, start_event, ready_event, status):
+def record_audio(duration, start_event, ready_event, status, output_path="myrecording.wav"):
     """Prepare the microphone, then record when the shared event is released."""
     sample_rate = 44100
 
@@ -21,9 +21,9 @@ def record_audio(duration, start_event, ready_event, status):
         )
         sd.wait()
 
-        write("myrecording.wav", sample_rate, recording)
+        write(output_path, sample_rate, recording)
         print("\nMicrophone recording finished!")
-        print("Audio saved as myrecording.wav")
+        print(f"Audio saved as {output_path}")
 
     except Exception as error:
         status["audio_error"] = str(error)

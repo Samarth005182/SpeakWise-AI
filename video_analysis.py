@@ -1531,12 +1531,15 @@ def print_sample_data(frames):
 # MAIN ANALYSIS FUNCTION
 # ============================================================
 
-def analyze_video():
+def analyze_video(video_file=None):
 
-    if not os.path.exists(VIDEO_FILE):
+    if video_file is None:
+        video_file = VIDEO_FILE
+
+    if not os.path.exists(video_file):
 
         print(
-            f"Video file not found: {VIDEO_FILE}"
+            f"Video file not found: {video_file}"
         )
 
         return None
@@ -1552,7 +1555,7 @@ def analyze_video():
         height,
         duration,
     ) = get_video_information(
-        VIDEO_FILE
+        video_file
     )
 
     # --------------------------------------------------------
@@ -1560,7 +1563,7 @@ def analyze_video():
     # --------------------------------------------------------
 
     frames = process_video(
-        VIDEO_FILE,
+        video_file,
         fps,
         width,
         height,

@@ -3,7 +3,7 @@ import time
 import cv2 as cv
 
 
-def record_video(duration, start_event, ready_event, status, timing):
+def record_video(duration, start_event, ready_event, status, timing, output_path="myrecording.avi"):
     """Prepare the camera, then record against the shared recording deadline."""
     cap = cv.VideoCapture(0)
 
@@ -25,7 +25,7 @@ def record_video(duration, start_event, ready_event, status, timing):
         actual_fps = declared_fps
 
     out = cv.VideoWriter(
-        "myrecording.avi",
+        output_path,
         cv.VideoWriter_fourcc(*"XVID"),
         actual_fps,
         (width, height),
