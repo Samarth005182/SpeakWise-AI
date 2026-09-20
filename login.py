@@ -1,9 +1,11 @@
-"""SpeakWise AI — Authentication & Admin Module.
+"""SpeakWise AI — Authentication & Session Management Module.
 
-Provides user registration, login, session history viewing,
-and an admin dashboard for user management.
+Provides user registration, login, session history, and account deletion
+backed by the MySQL database (users, sessions, takes) with full step-by-step
+'Back' navigation at every stage.
 """
 
+import json
 import re
 import time
 
@@ -35,19 +37,17 @@ def verify_password(password, password_hash):
 # VALIDATION HELPERS
 # ============================================================
 
-def _validate_username(username):
-    """Validate username: 3-50 chars, alphanumeric + underscores."""
-    if not username or len(username) < 3:
-        return "Username must be at least 3 characters."
-    if len(username) > 50:
-        return "Username must be at most 50 characters."
-    if not re.match(r"^[a-zA-Z0-9_]+$", username):
-        return "Username can only contain letters, numbers, and underscores."
+def _validate_name(name):
+    """Validate user name: 2-100 chars."""
+    if not name or len(name.strip()) < 2:
+        return "Name must be at least 2 characters."
+    if len(name) > 100:
+        return "Name must be at most 100 characters."
     return None
 
 
 def _validate_email(email):
-    """Basic email format validation."""
+    """Validate email format."""
     if not email:
         return "Email cannot be empty."
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
@@ -63,591 +63,486 @@ def _validate_password(password):
 
 
 # ============================================================
-# USER REGISTRATION
+# USER REGISTRATION WITH STEP-BY-STEP BACK SUPPORT
 # ============================================================
 
 def register():
-    """Register a new user account.
+    """Register a new user account in MySQL with step-by-step back navigation.
 
-    Prompts for username, email, password and confirmation.
-    Validates all input and stores the new user in the database.
+    Prompts for Name, Email, Password, and Confirmation.
+    Type 'b' or 'back' at any step to return to the previous step.
 
     Returns:
-        True if registration was successful, False otherwise.
+        True if registration was successful, False if cancelled.
     """
 
     print("\n" + "=" * 46)
     print("           CREATE NEW ACCOUNT")
-    print("=" * 46 + "\n")
+    print("=" * 46)
+    print("  (Type 'b' or 'back' at any step to go back)\n")
 
-    # --- Username ---
-    username = input("  Enter username : ").strip()
-    error = _validate_username(username)
-    if error:
-        print(f"\n  ✗ {error}")
-        return False
+    step = 1
+    name = ""
+    email = ""
+    password = ""
 
-    # --- Email ---
-    email = input("  Enter email    : ").strip()
-    error = _validate_email(email)
-    if error:
-        print(f"\n  ✗ {error}")
-        return False
+    while True:
+        if step == 1:
+            # --- Step 1: Full Name ---
+            val = input("  Enter full name  : ").strip()
+            if val.lower() in ("b", "back"):
+                print("\n  Registration cancelled. Returning to main menu...\n")
+                return False
 
-    # --- Password ---
-    password = input("  Enter password : ").strip()
-    error = _validate_password(password)
-    if error:
-        print(f"\n  ✗ {error}")
-        return False
+            error = _validate_name(val)
+            if error:
+                print(f"  [-] {error}\n")
+                continue
 
-    confirm = input("  Confirm password: ").strip()
-    if password != confirm:
-        print("\n  ✗ Passwords do not match.")
-        return False
+            name = val
+            step = 2
 
-    # --- Store in database ---
-    try:
-        db = get_connection()
-        cursor = db.cursor()
+        elif step == 2:
+            # --- Step 2: Email ---
+            val = input("  Enter email      : ").strip()
+            if val.lower() in ("b", "back"):
+                print("  <- Going back to Name...\n")
+                step = 1
+                continue
 
-        # Check for duplicate username or email
-        cursor.execute(
-            "SELECT username, email FROM users WHERE username = %s OR email = %s",
-            (username, email),
-        )
-        existing = cursor.fetchone()
-        if existing:
-            if existing[0].lower() == username.lower():
-                print("\n  ✗ Username is already taken. Please choose a different username.")
-            else:
-                print("\n  ✗ Email is already registered. Please log in instead.")
-            cursor.close()
-            db.close()
-            return False
+            error = _validate_email(val)
+            if error:
+                print(f"  [-] {error}\n")
+                continue
 
-        pw_hash = hash_password(password)
+            # Pre-check if email already exists in MySQL
+            db = None
+            cursor = None
+            try:
+                db = get_connection()
+                cursor = db.cursor(dictionary=True)
+                cursor.execute(
+                    "SELECT user_id FROM users WHERE LOWER(TRIM(email)) = %s",
+                    (val.lower(),),
+                )
+                if cursor.fetchone():
+                    print("\n  [-] Email is already registered in MySQL. Please log in instead or use another email.\n")
+                    continue
+            except mysql.connector.Error as err:
+                print(f"\n  [-] Database check error: {err}\n")
+            finally:
+                if cursor:
+                    cursor.close()
+                if db:
+                    db.close()
 
-        cursor.execute(
-            "INSERT INTO users (username, email, password_hash, is_admin) "
-            "VALUES (%s, %s, %s, %s)",
-            (username, email, pw_hash, False),
-        )
+            email = val.lower()
+            step = 3
 
-        db.commit()
-        cursor.close()
-        db.close()
+        elif step == 3:
+            # --- Step 3: Password ---
+            val = input("  Enter password   : ").strip()
+            if val.lower() in ("b", "back"):
+                print("  <- Going back to Email...\n")
+                step = 2
+                continue
 
-        print("\n  ✓ Account created successfully!")
-        print(f"  Welcome, {username}! You can now log in.\n")
-        return True
+            error = _validate_password(val)
+            if error:
+                print(f"  [-] {error}\n")
+                continue
 
-    except mysql.connector.Error as error:
-        print(f"\n  ✗ Registration failed: {error}")
-        return False
+            password = val
+            step = 4
+
+        elif step == 4:
+            # --- Step 4: Confirm Password ---
+            confirm = input("  Confirm password : ").strip()
+            if confirm.lower() in ("b", "back"):
+                print("  <- Going back to Password...\n")
+                step = 3
+                continue
+
+            if password != confirm:
+                print("  [-] Passwords do not match. Try again or type 'b' to go back.\n")
+                continue
+
+            # --- Store in MySQL database ---
+            db = None
+            cursor = None
+            try:
+                db = get_connection()
+                cursor = db.cursor(dictionary=True)
+
+                pw_hash = hash_password(password)
+
+                cursor.execute(
+                    "INSERT INTO users (name, email, password) VALUES (%s, %s, %s)",
+                    (name, email, pw_hash),
+                )
+
+                db.commit()
+
+                print("\n  [+] Account created and permanently saved to MySQL database!")
+                print(f"  Welcome, {name}! You can now log in.\n")
+                return True
+
+            except mysql.connector.Error as error:
+                if getattr(error, "errno", None) == 1062:
+                    print("\n  [-] Email is already registered in MySQL. Please log in instead.\n")
+                else:
+                    print(f"\n  [-] Registration failed in MySQL: {error}\n")
+                return False
+            finally:
+                if cursor:
+                    cursor.close()
+                if db:
+                    db.close()
 
 
 # ============================================================
-# USER LOGIN
+# USER LOGIN WITH STEP-BY-STEP BACK SUPPORT
 # ============================================================
 
 def login():
-    """Prompt the user to log in with username/email and password.
+    """Prompt the user to log in with Email (or Name) and password from MySQL.
 
-    Allows up to 3 attempts before returning None.
+    Supports typing 'b' or 'back' at any step to return to the previous step
+    or cancel back to the welcome menu.
 
     Returns:
-        dict with user info {id, username, email, is_admin} on success,
-        or None on failure.
+        dict {user_id, name, email} on success, or None on cancel/failure.
     """
 
     print("\n" + "=" * 46)
     print("                 LOGIN")
-    print("=" * 46 + "\n")
+    print("=" * 46)
+    print("  (Type 'b' or 'back' at any prompt to go back)\n")
 
-    max_attempts = 3
+    step = 1
+    login_input = ""
+    password = ""
 
-    for attempt in range(1, max_attempts + 1):
+    while True:
+        if step == 1:
+            # --- Step 1: Email or Name ---
+            raw_input = input("  Email or Name : ").strip()
+            if raw_input.lower() in ("b", "back"):
+                print("\n  Returning to main menu...\n")
+                return None
 
-        login_input = input("  Username or Email : ").strip()
-        password = input("  Password          : ").strip()
+            if not raw_input:
+                print("  [-] Email/Name cannot be empty.\n")
+                continue
 
-        if not login_input or not password:
-            print("  ✗ Username/Email and password cannot be empty.\n")
-            continue
+            login_input = raw_input
+            step = 2
 
-        try:
-            db = get_connection()
-            cursor = db.cursor(dictionary=True)
+        elif step == 2:
+            # --- Step 2: Password ---
+            raw_pw = input("  Password      : ").strip()
+            if raw_pw.lower() in ("b", "back"):
+                print("  <- Going back to Email/Name...\n")
+                step = 1
+                continue
 
-            cursor.execute(
-                "SELECT id, username, email, password_hash, is_admin "
-                "FROM users WHERE username = %s OR email = %s",
-                (login_input, login_input),
-            )
-            user = cursor.fetchone()
+            if not raw_pw:
+                print("  [-] Password cannot be empty.\n")
+                continue
 
-            cursor.close()
-            db.close()
+            password = raw_pw
 
-            if user and verify_password(password, user["password_hash"]):
-                print(f"\n  ✓ Login successful! Welcome back, {user['username']}!\n")
-                return {
-                    "id": user["id"],
-                    "username": user["username"],
-                    "email": user["email"],
-                    "is_admin": bool(user["is_admin"]),
-                }
+            # Authenticate against MySQL
+            db = None
+            cursor = None
+            try:
+                db = get_connection()
+                cursor = db.cursor(dictionary=True)
 
-            print(f"  ✗ Invalid username/email or password. "
-                  f"({max_attempts - attempt} attempts remaining)\n")
+                cursor.execute(
+                    """
+                    SELECT user_id, name, email, password 
+                    FROM users 
+                    WHERE LOWER(TRIM(email)) = LOWER(TRIM(%s)) 
+                       OR LOWER(TRIM(name)) = LOWER(TRIM(%s))
+                    """,
+                    (login_input, login_input),
+                )
+                user = cursor.fetchone()
 
-        except mysql.connector.Error as error:
-            print(f"  ✗ Login error: {error}\n")
+                if not user:
+                    print(f"\n  [-] No user found matching '{login_input}' in MySQL.")
+                    print("  Please check the email/name or type 'b' to go back.\n")
+                    step = 1
+                    continue
 
-    print("  ✗ Too many failed attempts.\n")
-    return None
+                if verify_password(password, user["password"]):
+                    print(f"\n  [+] Login successful! Welcome back, {user['name']}!\n")
+                    return {
+                        "user_id": user["user_id"],
+                        "name": user["name"],
+                        "email": user["email"],
+                    }
+
+                print("\n  [-] Incorrect password. Please try again or type 'b' to go back.\n")
+                # Stay at step 2 to allow re-entering password or typing 'b' to change username
+
+            except mysql.connector.Error as error:
+                print(f"\n  [-] MySQL error during login: {error}\n")
+                return None
+            finally:
+                if cursor:
+                    cursor.close()
+                if db:
+                    db.close()
 
 
 # ============================================================
-# SESSION HISTORY
+# SESSION & TAKE STORAGE
 # ============================================================
 
-def save_session(user_id, topic, scores):
-    """Save a speech session's scores to the database.
+def save_session(user_id, category, topic_name, speaking_time, audio_path, video_path, transcription, report):
+    """Save a completed speech session and its take details to MySQL.
+
+    Inserts into:
+      1. `sessions` (user_id, category, topic_name, speaking_time)
+      2. `takes` (session_id, audio_path, video_path, transcription, report)
 
     Args:
-        user_id: The logged-in user's ID.
-        topic: The speech topic.
-        scores: Dict with score keys matching the sessions table columns.
+        user_id: The ID of the logged-in user.
+        category: Speech category (e.g., 'Practice', 'AI Topic', etc.)
+        topic_name: The speech topic title.
+        speaking_time: Duration of speaking in seconds.
+        audio_path: File path of the recorded audio (.wav).
+        video_path: File path of the recorded video (.avi).
+        transcription: Full transcribed text string.
+        report: Detailed report string or JSON summary.
     """
 
+    db = None
+    cursor = None
     try:
         db = get_connection()
         cursor = db.cursor()
 
+        # 1. Insert into sessions table
         cursor.execute(
-            "INSERT INTO sessions "
-            "(user_id, topic, overall_score, fluency_score, pace_score, "
-            "pause_score, eye_contact_score, head_stability_score, "
-            "relevance_score, total_words, total_fillers) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (
-                user_id,
-                topic,
-                scores.get("overall"),
-                scores.get("fluency"),
-                scores.get("pace"),
-                scores.get("pauses"),
-                scores.get("eye_contact"),
-                scores.get("head_stability"),
-                scores.get("relevance"),
-                scores.get("total_words"),
-                scores.get("total_fillers"),
-            ),
+            """
+            INSERT INTO sessions (user_id, category, topic_name, speaking_time) 
+            VALUES (%s, %s, %s, %s)
+            """,
+            (user_id, category or "General Practice", topic_name or "Untitled Topic", int(speaking_time or 60)),
+        )
+
+        session_id = cursor.lastrowid
+
+        # Format report as string if it is a dict
+        report_str = json.dumps(report, indent=2) if isinstance(report, dict) else str(report or "")
+
+        # 2. Insert into takes table
+        cursor.execute(
+            """
+            INSERT INTO takes (session_id, audio_path, video_path, transcription, report) 
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (session_id, audio_path or "", video_path or "", transcription or "", report_str),
         )
 
         db.commit()
-        cursor.close()
-        db.close()
+        print(f"  [+] Session #{session_id} and take committed to MySQL.")
 
     except mysql.connector.Error as error:
-        print(f"  ⚠ Could not save session: {error}")
+        print(f"  [!] Could not save session to MySQL: {error}")
+    finally:
+        if cursor:
+            cursor.close()
+        if db:
+            db.close()
 
 
 def view_my_sessions(user):
-    """Display the logged-in user's past speech sessions."""
+    """Display the logged-in user's past speech sessions and takes from MySQL."""
 
     print("\n" + "=" * 60)
-    print("             MY SESSION HISTORY")
+    print("             MY SESSION HISTORY (From MySQL)")
     print("=" * 60)
 
+    db = None
+    cursor = None
     try:
         db = get_connection()
         cursor = db.cursor(dictionary=True)
 
         cursor.execute(
-            "SELECT topic, overall_score, fluency_score, pace_score, "
-            "pause_score, eye_contact_score, head_stability_score, "
-            "relevance_score, total_words, total_fillers, session_date "
-            "FROM sessions WHERE user_id = %s ORDER BY session_date DESC",
-            (user["id"],),
+            """
+            SELECT 
+                s.session_id,
+                s.category,
+                s.topic_name,
+                s.speaking_time,
+                s.created_at,
+                t.take_id,
+                t.audio_path,
+                t.video_path,
+                t.transcription,
+                t.report
+            FROM sessions s
+            LEFT JOIN takes t ON s.session_id = t.session_id
+            WHERE s.user_id = %s
+            ORDER BY s.created_at DESC
+            """,
+            (user["user_id"],),
         )
         rows = cursor.fetchall()
 
-        cursor.close()
-        db.close()
-
         if not rows:
-            print("\n  No sessions found. Start a speech practice to begin!\n")
+            print("\n  No sessions found in MySQL. Start a speech practice to begin!\n")
+            input("  Press ENTER to return to menu...")
             return
 
         for i, row in enumerate(rows, 1):
-            date_str = row["session_date"].strftime("%Y-%m-%d %H:%M")
-            overall = row["overall_score"]
-            overall_display = f"{overall}/10" if overall is not None else "N/A"
+            date_str = row["created_at"].strftime("%Y-%m-%d %H:%M") if row.get("created_at") else "N/A"
+            category = row.get("category") or "General"
+            topic = row.get("topic_name") or "Untitled"
+            speaking_time = row.get("speaking_time") or 60
 
-            print(f"\n  Session #{i}  |  {date_str}")
-            print(f"  Topic: {row['topic'] or 'Unknown'}")
-            print(f"  Overall Score: {overall_display}")
-            print(f"  ├─ Fluency:       {_fmt_score(row['fluency_score'])}")
-            print(f"  ├─ Pace:          {_fmt_score(row['pace_score'])}")
-            print(f"  ├─ Pauses:        {_fmt_score(row['pause_score'])}")
-            print(f"  ├─ Eye Contact:   {_fmt_score(row['eye_contact_score'])}")
-            print(f"  ├─ Head Stability:{_fmt_score(row['head_stability_score'])}")
-            print(f"  └─ Relevance:     {_fmt_score(row['relevance_score'])}")
-            print(f"  Words: {row['total_words'] or 0}  |  "
-                  f"Fillers: {row['total_fillers'] or 0}")
-            print("  " + "-" * 44)
+            print(f"\n  Session #{i} (ID: {row['session_id']}) | {date_str}")
+            print(f"  Category      : {category}")
+            print(f"  Topic         : {topic}")
+            print(f"  Speaking Time : {speaking_time} seconds")
+
+            trans = (row.get("transcription") or "").strip()
+            if trans:
+                preview = trans[:100] + ("..." if len(trans) > 100 else "")
+                print(f"  Transcript    : \"{preview}\"")
+
+            report_raw = row.get("report")
+            if report_raw:
+                try:
+                    rep_data = json.loads(report_raw) if isinstance(report_raw, str) and report_raw.startswith("{") else None
+                    if rep_data and "overall" in rep_data:
+                        print(f"  Overall Score : {rep_data.get('overall')}/10")
+                except Exception:
+                    pass
+
+            print("  " + "-" * 50)
 
         print()
+        input("  Press ENTER to return to menu...")
 
     except mysql.connector.Error as error:
-        print(f"\n  ✗ Could not load sessions: {error}\n")
-
-
-def _fmt_score(value):
-    """Format a score value for display."""
-    return f"{value}/10" if value is not None else "N/A"
+        print(f"\n  [-] Could not load sessions from MySQL: {error}\n")
+    finally:
+        if cursor:
+            cursor.close()
+        if db:
+            db.close()
 
 
 # ============================================================
-# ADMIN DASHBOARD
+# ACCOUNT DELETION WITH STEP-BY-STEP BACK SUPPORT
 # ============================================================
 
-def admin_dashboard(user):
-    """Admin dashboard for user and session management.
+def delete_account(user):
+    """Permanently delete the user's account and all associated data from MySQL.
 
-    Only accessible by users with is_admin=True.
+    Prompts for password verification and explicit user re-confirmation.
+    Type 'b' or 'back' at any prompt to cancel and go back.
+
+    Returns:
+        bool: True if account was deleted, False if cancelled or failed.
     """
 
-    if not user.get("is_admin"):
-        print("\n  ✗ Access denied. Admin privileges required.\n")
-        return
+    print("\n" + "=" * 50)
+    print("           PERMANENT ACCOUNT DELETION")
+    print("=" * 50)
+    print("\n  WARNING: This will permanently delete your account,")
+    print("  all past speech sessions, takes, and evaluations from MySQL.")
+    print("  This action CANNOT be undone.\n")
+    print("  (Type 'b' or 'back' at any prompt to cancel)\n")
 
-    while True:
-        print("\n" + "=" * 50)
-        print("              ADMIN DASHBOARD")
-        print("=" * 50)
-        print()
-        print("  1. View All Users")
-        print("  2. View User Session History")
-        print("  3. Promote User to Admin")
-        print("  4. Demote Admin to User")
-        print("  5. Delete User")
-        print("  6. System Stats")
-        print("  7. Back to Main Menu")
-        print()
+    # Step 1: Initial confirmation
+    confirm_step1 = input("  Are you sure you want to delete your account? (yes/no): ").strip().lower()
+    if confirm_step1 in ("b", "back", "no", "n"):
+        print("\n  Account deletion cancelled. Returning to menu...\n")
+        return False
 
-        choice = input("  Select option (1-7): ").strip()
+    if confirm_step1 not in ("yes", "y"):
+        print("\n  [-] Invalid response. Account deletion cancelled.\n")
+        return False
 
-        if choice == "1":
-            _admin_view_users()
-        elif choice == "2":
-            _admin_view_sessions()
-        elif choice == "3":
-            _admin_promote_user()
-        elif choice == "4":
-            _admin_demote_user(user)
-        elif choice == "5":
-            _admin_delete_user(user)
-        elif choice == "6":
-            _admin_system_stats()
-        elif choice == "7":
-            break
-        else:
-            print("  ✗ Invalid option. Please try again.")
+    # Step 2: Password verification
+    password = input("  Enter your account password to verify: ").strip()
+    if password.lower() in ("b", "back"):
+        print("\n  Account deletion cancelled. Returning to menu...\n")
+        return False
 
+    if not password:
+        print("\n  [-] Password cannot be empty. Deletion cancelled.\n")
+        return False
 
-def _admin_view_users():
-    """Display all registered users in a formatted table."""
-
+    db = None
+    cursor = None
     try:
         db = get_connection()
         cursor = db.cursor(dictionary=True)
 
         cursor.execute(
-            "SELECT id, username, email, is_admin, created_at FROM users "
-            "ORDER BY id"
+            "SELECT user_id, password FROM users WHERE user_id = %s",
+            (user["user_id"],),
         )
-        users = cursor.fetchall()
+        user_row = cursor.fetchone()
 
-        cursor.close()
-        db.close()
+        if not user_row or not verify_password(password, user_row["password"]):
+            print("\n  [-] Incorrect password. Account deletion cancelled.\n")
+            return False
 
-        print("\n  " + "-" * 72)
-        print(f"  {'ID':<5} {'Username':<15} {'Email':<25} "
-              f"{'Admin':<7} {'Created':<16}")
-        print("  " + "-" * 72)
+        # Step 3: Explicit re-confirmation
+        print("\n  Final Confirmation:")
+        confirm_step3 = input("  Type 'DELETE' to confirm permanent deletion: ").strip()
+        if confirm_step3.lower() in ("b", "back"):
+            print("\n  Account deletion cancelled. Returning to menu...\n")
+            return False
 
-        for u in users:
-            admin_flag = "Yes" if u["is_admin"] else "No"
-            created = u["created_at"].strftime("%Y-%m-%d %H:%M")
-            print(f"  {u['id']:<5} {u['username']:<15} {u['email']:<25} "
-                  f"{admin_flag:<7} {created:<16}")
+        if confirm_step3 != "DELETE":
+            print("\n  [-] Confirmation mismatch ('DELETE' was not entered). Deletion cancelled.\n")
+            return False
 
-        print("  " + "-" * 72)
-        print(f"  Total: {len(users)} users\n")
-
-    except mysql.connector.Error as error:
-        print(f"\n  ✗ Error: {error}\n")
-
-
-def _admin_view_sessions():
-    """View session history for a specific user (by username or email)."""
-
-    user_input = input("\n  Enter username or email to view sessions: ").strip()
-    if not user_input:
-        return
-
-    try:
-        db = get_connection()
-        cursor = db.cursor(dictionary=True)
-
-        cursor.execute(
-            "SELECT id, username FROM users WHERE username = %s OR email = %s",
-            (user_input, user_input),
-        )
-        target = cursor.fetchone()
-
-        if not target:
-            print(f"  ✗ User '{user_input}' not found.")
-            cursor.close()
-            db.close()
-            return
-
-        cursor.execute(
-            "SELECT topic, overall_score, fluency_score, pace_score, "
-            "pause_score, eye_contact_score, head_stability_score, "
-            "relevance_score, total_words, total_fillers, session_date "
-            "FROM sessions WHERE user_id = %s ORDER BY session_date DESC",
-            (target["id"],),
-        )
-        rows = cursor.fetchall()
-
-        cursor.close()
-        db.close()
-
-        if not rows:
-            print(f"  No sessions found for '{target['username']}'.\n")
-            return
-
-        print(f"\n  Sessions for {target['username']}:")
-        print("  " + "-" * 50)
-
-        for i, row in enumerate(rows, 1):
-            date_str = row["session_date"].strftime("%Y-%m-%d %H:%M")
-            overall = row["overall_score"]
-            overall_display = f"{overall}/10" if overall is not None else "N/A"
-
-            print(f"  #{i} | {date_str} | Topic: {row['topic'] or 'Unknown'}")
-            print(f"      Overall: {overall_display} | "
-                  f"Words: {row['total_words'] or 0} | "
-                  f"Fillers: {row['total_fillers'] or 0}")
-
-        print("  " + "-" * 50 + "\n")
-
-    except mysql.connector.Error as error:
-        print(f"\n  ✗ Error: {error}\n")
-
-
-def _admin_promote_user():
-    """Promote a regular user to admin."""
-
-    user_input = input("\n  Enter username or email to promote: ").strip()
-    if not user_input:
-        return
-
-    try:
-        db = get_connection()
-        cursor = db.cursor(dictionary=True)
-
-        cursor.execute(
-            "SELECT id, username, is_admin FROM users WHERE username = %s OR email = %s",
-            (user_input, user_input),
-        )
-        target = cursor.fetchone()
-
-        if not target:
-            print(f"  ✗ User '{user_input}' not found.")
-        elif target["is_admin"]:
-            print(f"  ✗ '{target['username']}' is already an admin.")
-        else:
-            cursor.execute(
-                "UPDATE users SET is_admin = TRUE WHERE id = %s",
-                (target["id"],),
-            )
-            db.commit()
-            print(f"  ✓ '{target['username']}' has been promoted to admin.")
-
-        cursor.close()
-        db.close()
-
-    except mysql.connector.Error as error:
-        print(f"\n  ✗ Error: {error}\n")
-
-
-def _admin_demote_user(current_user):
-    """Demote an admin to regular user. Cannot demote yourself."""
-
-    user_input = input("\n  Enter admin username or email to demote: ").strip()
-    if not user_input:
-        return
-
-    if user_input.lower() in (current_user["username"].lower(), current_user["email"].lower()):
-        print("  ✗ You cannot demote yourself.")
-        return
-
-    try:
-        db = get_connection()
-        cursor = db.cursor(dictionary=True)
-
-        cursor.execute(
-            "SELECT id, username, is_admin FROM users WHERE username = %s OR email = %s",
-            (user_input, user_input),
-        )
-        target = cursor.fetchone()
-
-        if not target:
-            print(f"  ✗ User '{user_input}' not found.")
-        elif not target["is_admin"]:
-            print(f"  ✗ '{target['username']}' is not an admin.")
-        else:
-            cursor.execute(
-                "UPDATE users SET is_admin = FALSE WHERE id = %s",
-                (target["id"],),
-            )
-            db.commit()
-            print(f"  ✓ '{target['username']}' has been demoted to regular user.")
-
-        cursor.close()
-        db.close()
-
-    except mysql.connector.Error as error:
-        print(f"\n  ✗ Error: {error}\n")
-
-
-def _admin_delete_user(current_user):
-    """Delete a user and their sessions. Cannot delete yourself."""
-
-    user_input = input("\n  Enter username or email to delete: ").strip()
-    if not user_input:
-        return
-
-    if user_input.lower() in (current_user["username"].lower(), current_user["email"].lower()):
-        print("  ✗ You cannot delete your own account.")
-        return
-
-    try:
-        db = get_connection()
-        cursor = db.cursor(dictionary=True)
-
-        cursor.execute(
-            "SELECT id, username FROM users WHERE username = %s OR email = %s",
-            (user_input, user_input),
-        )
-        target = cursor.fetchone()
-
-        if not target:
-            print(f"  ✗ User '{user_input}' not found.")
-            cursor.close()
-            db.close()
-            return
-
-        confirm = input(
-            f"  ⚠ Delete user '{target['username']}' and all their data? (yes/no): "
-        ).strip().lower()
-
-        if confirm != "yes":
-            print("  Cancelled.")
-            cursor.close()
-            db.close()
-            return
-
-        cursor.execute("DELETE FROM users WHERE id = %s", (target["id"],))
+        # Step 4: Execute deletion in MySQL (Cascades to sessions and takes)
+        cursor.execute("DELETE FROM users WHERE user_id = %s", (user["user_id"],))
         db.commit()
-        print(f"  ✓ User '{target['username']}' has been deleted.")
 
-        cursor.close()
-        db.close()
-
-    except mysql.connector.Error as error:
-        print(f"\n  ✗ Error: {error}\n")
-        db.close()
+        print(f"\n  [+] Account for '{user['name']}' ({user['email']}) has been permanently deleted from MySQL.\n")
+        return True
 
     except mysql.connector.Error as error:
-        print(f"\n  ✗ Error: {error}\n")
-
-
-def _admin_system_stats():
-    """Display overall system statistics."""
-
-    try:
-        db = get_connection()
-        cursor = db.cursor()
-
-        cursor.execute("SELECT COUNT(*) FROM users")
-        total_users = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM users WHERE is_admin = TRUE")
-        total_admins = cursor.fetchone()[0]
-
-        cursor.execute("SELECT COUNT(*) FROM sessions")
-        total_sessions = cursor.fetchone()[0]
-
-        cursor.execute("SELECT AVG(overall_score) FROM sessions")
-        avg_score = cursor.fetchone()[0]
-
-        cursor.execute(
-            "SELECT u.username, COUNT(s.id) as session_count "
-            "FROM users u LEFT JOIN sessions s ON u.id = s.user_id "
-            "GROUP BY u.id ORDER BY session_count DESC LIMIT 5"
-        )
-        top_users = cursor.fetchall()
-
-        cursor.close()
-        db.close()
-
-        print("\n  " + "=" * 40)
-        print("          SYSTEM STATISTICS")
-        print("  " + "=" * 40)
-        print(f"  Total Users:     {total_users}")
-        print(f"  Admin Users:     {total_admins}")
-        print(f"  Total Sessions:  {total_sessions}")
-        print(f"  Avg Score:       "
-              f"{avg_score:.1f}/10" if avg_score else "  Avg Score:       N/A")
-
-        if top_users:
-            print("\n  Most Active Users:")
-            for username, count in top_users:
-                print(f"    {username}: {count} sessions")
-
-        print("  " + "=" * 40 + "\n")
-
-    except mysql.connector.Error as error:
-        print(f"\n  ✗ Error: {error}\n")
+        print(f"\n  [-] MySQL error during account deletion: {error}\n")
+        return False
+    finally:
+        if cursor:
+            cursor.close()
+        if db:
+            db.close()
 
 
 # ============================================================
-# AUTHENTICATION FLOW (called from main.py)
+# AUTHENTICATION & USER FLOW
 # ============================================================
 
 def authenticate():
-    """Main authentication flow.
+    """Main authentication gate.
 
-    Initializes the database, then asks the user whether they
-    have an account. Routes to login or register accordingly.
+    Initializes MySQL database tables, then presents login/register options.
 
     Returns:
         dict with user info on success, or None to exit.
     """
 
-    # Ensure database tables and admin account exist
     try:
         initialize_database()
     except Exception as e:
-        print(f"\n  ✗ Database initialization failed: {e}")
-        print("  Please check your database connection settings in .env\n")
+        print(f"\n  [-] Database initialization failed: {e}")
+        print("  Please verify your MySQL service and settings in .env\n")
         return None
 
     while True:
@@ -677,54 +572,42 @@ def authenticate():
                 if user:
                     return user
 
-        elif choice == "3":
+        elif choice in ("3", "exit", "e", "q", "quit"):
             print("\n  Goodbye!\n")
             return None
 
         else:
-            print("  ✗ Invalid option. Please try again.")
+            print("  [-] Invalid option. Please try again.")
 
 
 def user_menu(user):
     """Post-login menu for the authenticated user.
 
     Returns:
-        str — "speech" to start a practice session,
-               "sessions" to view history,
-               "admin" to open admin dashboard,
-               "logout" to log out.
+        str — 'speech' to start practice, 'logout' to log out, 'deleted' if deleted.
     """
 
     while True:
         print("\n" + "=" * 46)
-        print(f"  Welcome, {user['username']}!")
+        print(f"  Welcome, {user['name']}!")
         print("=" * 46)
         print()
         print("  1. Start Speech Practice")
         print("  2. View My Past Sessions")
-
-        if user.get("is_admin"):
-            print("  3. Admin Dashboard")
-            print("  4. Logout")
-            max_option = 4
-        else:
-            print("  3. Logout")
-            max_option = 3
-
+        print("  3. Logout")
+        print("  4. Delete Account Permanently")
         print()
 
-        choice = input(f"  Select option (1-{max_option}): ").strip()
+        choice = input("  Select option (1-4): ").strip()
 
         if choice == "1":
             return "speech"
         elif choice == "2":
             view_my_sessions(user)
         elif choice == "3":
-            if user.get("is_admin"):
-                admin_dashboard(user)
-            else:
-                return "logout"
-        elif choice == "4" and user.get("is_admin"):
             return "logout"
+        elif choice == "4":
+            if delete_account(user):
+                return "deleted"
         else:
-            print("  ✗ Invalid option. Please try again.")
+            print("  [-] Invalid option. Please try again.")

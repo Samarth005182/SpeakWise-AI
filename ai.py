@@ -43,7 +43,7 @@ def _connect_with_fallback(client, setup_message):
         try:
             chat = client.chats.create(model=model_name)
             res = _send_with_retry(chat, setup_message)
-            print(f"  Connected to {model_name} ✓")
+            print(f"  Connected to {model_name} [OK]")
             return chat, res
         except Exception as e:
             last_error = e
@@ -117,7 +117,7 @@ def ai_prepare(topic, time_limit=120):
             res = _send_with_retry(chat, message)
             print(f"\nAI Coach: {res.text}\n")
         except Exception as e:
-            print(f"\n⚠ Couldn't get a response: {e}")
+            print(f"\n[!] Couldn't get a response: {e}")
             print("Try again or type 'done' to move on.\n")
 
     # Ensure timer thread finishes

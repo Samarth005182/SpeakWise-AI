@@ -132,7 +132,7 @@ def run_speech_session():
         print("\nUnable to start recording:")
         for device, error in recording_status.items():
             print(f"- {device}: {error}")
-        return topic, None
+        return None
 
     # `perf_counter` provides a monotonic, common deadline for video and timer.
     timing["start_time"] = time.perf_counter()
@@ -168,7 +168,7 @@ def run_speech_session():
     text = transcribe_audio(audio_path)
     if text is None:
         print("\nTranscription failed.")
-        return topic, None
+        return None
 
     words = text.split()
     total_words = len(words)
@@ -210,7 +210,8 @@ def run_speech_session():
     }
     scores["overall"] = calculate_overall(scores)
 
-    return topic, scores
+    category = "Speech Practice"
+    return category, topic, RECORDING_SECONDS, audio_path, video_path, text, scores
 
 
 if __name__ == "__main__":
@@ -226,16 +227,29 @@ if __name__ == "__main__":
             action = user_menu(user)
 
             if action == "speech":
-                topic, scores = run_speech_session()
+                result = run_speech_session()
 
-                if scores is not None:
-                    save_session(user["id"], topic, scores)
-                    print("\n  ✓ Session saved to your history.\n")
+                if result and result[1] is not None:
+                    category, topic, speaking_time, audio_path, video_path, text, report_data = result
+                    save_session(
+                        user_id=user["user_id"],
+                        category=category,
+                        topic_name=topic,
+                        speaking_time=speaking_time,
+                        audio_path=audio_path,
+                        video_path=video_path,
+                        transcription=text,
+                        report=report_data,
+                    )
+                    print("\n  [+] Session and take saved to your history.\n")
                 else:
-                    print("\n  ⚠ Session could not be scored.\n")
+                    print("\n  [!] Session could not be saved.\n")
 
                 input("\nPress ENTER to continue...")
 
             elif action == "logout":
-                print(f"\n  Logged out. Goodbye, {user['username']}!\n")
+                print(f"\n  Logged out. Goodbye, {user['name']}!\n")
+                break
+
+            elif action == "deleted":
                 break

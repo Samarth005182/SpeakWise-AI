@@ -693,7 +693,7 @@ def print_report(
         print("--- What You Did Well ---")
         print()
         for item in strengths:
-            print(f"  ✓ {item}")
+            print(f"  [+] {item}")
 
     # --------------------------------------------------------
     # Improvements
@@ -704,7 +704,7 @@ def print_report(
         print("--- Areas to Improve ---")
         print()
         for item in improvements:
-            print(f"  ✗ {item}")
+            print(f"  [-] {item}")
 
     # --------------------------------------------------------
     # Encouragement
