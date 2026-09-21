@@ -13,12 +13,13 @@ from filler_detection import detect_fillers
 from transcription import transcribe_audio
 from video_analysis import analyze_video
 from report import print_report, calculate_overall
-from ai import ai_prepare
+from ai import ai_prepare, analyze_relevance
 from recording_paths import generate_recording_paths
 from login import authenticate, user_menu, save_session
+from topics import get_random_topic, get_all_categories
 
 
-RECORDING_SECONDS = 60
+DEFAULT_RECORDING_SECONDS = 60
 
 def countdown(total_seconds):
     for remaining in range(total_seconds, 0, -1):
@@ -43,43 +44,132 @@ def recording_countdown(timing):
     print()
 
 
+def select_category():
+    """Prompt the user to choose a category or surprise random selection."""
+    categories = get_all_categories()
+    print("\n" + "=" * 60)
+    print("               CHOOSE SPEECH CATEGORY")
+    print("=" * 60)
+    print()
+    for i, cat in enumerate(categories, 1):
+        print(f"  {i:>2}. {cat}")
+    print("   0. Surprise Me / Random Category")
+    print()
+    print("  (Type 'b' or 'back' to cancel)\n")
+
+    while True:
+        choice = input("  Select category (0-16) [Default: 0]: ").strip()
+        if choice.lower() in ("b", "back"):
+            return "CANCELLED"
+        if not choice or choice == "0":
+            return None
+
+        if choice.isdigit():
+            idx = int(choice)
+            if 1 <= idx <= len(categories):
+                return categories[idx - 1]
+
+        for cat in categories:
+            if choice.lower() == cat.lower():
+                return cat
+
+        print(f"  [-] Invalid option. Please enter a number between 0 and {len(categories)}.")
+
+
+def select_speaking_duration():
+    """Prompt the user to choose the speech recording duration in seconds."""
+    print("\n" + "=" * 60)
+    print("               CHOOSE SPEAKING DURATION")
+    print("=" * 60)
+    print()
+    print("  1. 30 Seconds  (Quick Extempore)")
+    print("  2. 60 Seconds  (1 Minute - Standard Default)")
+    print("  3. 90 Seconds  (1.5 Minutes)")
+    print("  4. 120 Seconds (2 Minutes - Deep Dive)")
+    print("  5. Custom Duration")
+    print()
+    print("  (Type 'b' or 'back' to cancel)\n")
+
+    while True:
+        choice = input("  Select duration (1-5) [Default: 2]: ").strip()
+        if choice.lower() in ("b", "back"):
+            return None
+        if not choice or choice == "2":
+            return 60
+        elif choice == "1":
+            return 30
+        elif choice == "3":
+            return 90
+        elif choice == "4":
+            return 120
+        elif choice == "5":
+            while True:
+                custom = input("  Enter custom seconds (15 - 300) [Default: 60]: ").strip()
+                if custom.lower() in ("b", "back"):
+                    break
+                if not custom:
+                    return 60
+                if custom.isdigit():
+                    sec = int(custom)
+                    if 15 <= sec <= 300:
+                        return sec
+                    else:
+                        print("  [-] Duration must be between 15 and 300 seconds.")
+                else:
+                    print("  [-] Please enter a valid number.")
+        else:
+            print("  [-] Invalid option. Please choose 1-5.")
+
+
 def run_speech_session():
     """Run a single speech practice session.
 
     Returns:
-        tuple of (topic, scores_dict) on success, or (None, None) on failure.
+        tuple of (category, topic, speaking_seconds, audio_path, video_path, text, scores)
+        or None on failure/cancel.
     """
 
+    # --- Step 1: Category Selection ---
+    selected_category = select_category()
+    if selected_category == "CANCELLED":
+        print("\n  Practice cancelled. Returning to menu...\n")
+        return None
+
+    # --- Step 2: Speaking Duration Selection ---
+    speaking_seconds = select_speaking_duration()
+    if speaking_seconds is None:
+        print("\n  Practice cancelled. Returning to menu...\n")
+        return None
+
     time.sleep(1)
-    print("\n ----- SPEAKWISE AI ----- \n")
-    time.sleep(2)
+    print("\n" + "=" * 60)
+    print("             SPEAKWISE AI — GENERATING TOPIC")
+    print("=" * 60)
+    if selected_category:
+        print(f"\n  Selected Category : {selected_category}")
+    else:
+        print("\n  Category Mode     : Random / Surprise Me")
 
-    topics = [
-        "The Great Emu War",
-        "Tetris Effect",
-        "The Dancing Plague of 1518",
-        "Ghost Ships and the 'Mary Celeste' Mystery",
-        "The Overview Effect",
-        "Kessler Syndrome",
-        "The Voynich Manuscript",
-        "The Year Without a Summer (1816)",
-        "The Antikythera Mechanism",
-        "The Dark Flow",
-    ]
+    print("  Generating fresh speech topic with AI...\n")
+    category, topic = get_random_topic(selected_category)
 
-    topic = random.choice(topics)
-    print("The topic is:", topic)
+    time.sleep(1)
+    print("=" * 60)
+    print(f"  CATEGORY : {category}")
+    print(f"  TOPIC    : \"{topic}\"")
+    print(f"  DURATION : {speaking_seconds} seconds")
+    print("=" * 60)
     time.sleep(3)
 
     PREP_SECONDS = 120
 
     print("\n--- Preparation Phase ---")
-    print("You can chat with an AI coach to prepare your speech.")
+    print("You can chat with an AI coach to brainstorm and structure your speech.")
     print(f"You have {PREP_SECONDS} seconds.\n")
     time.sleep(2)
 
     try:
-        ai_prepare(topic, time_limit=PREP_SECONDS)
+        ai_prepare(topic, time_limit=PREP_SECONDS, speaking_time=speaking_seconds)
     except Exception as e:
         print(f"\nAI Coach unavailable ({e}). Proceeding with silent prep...")
         print("\n###### PREPARATION TIME ######")
@@ -89,7 +179,7 @@ def run_speech_session():
     countdown(10)
 
     print("\n###### GET SPEAKING ######")
-    print(f"You have {RECORDING_SECONDS} seconds.\n")
+    print(f"You have {speaking_seconds} seconds.\n")
     print("For the first 3 seconds, look naturally at the camera for visual calibration.")
 
     # The two workers prepare their devices independently, then wait behind the
@@ -108,12 +198,12 @@ def run_speech_session():
     print("Preparing microphone and camera...")
     audio_thread = threading.Thread(
         target=audio.record_audio,
-        args=(RECORDING_SECONDS, start_event, audio_ready, recording_status, audio_path),
+        args=(speaking_seconds, start_event, audio_ready, recording_status, audio_path),
     )
     video_thread = threading.Thread(
         target=video_capture.record_video,
         args=(
-            RECORDING_SECONDS,
+            speaking_seconds,
             start_event,
             video_ready,
             recording_status,
@@ -136,7 +226,7 @@ def run_speech_session():
 
     # `perf_counter` provides a monotonic, common deadline for video and timer.
     timing["start_time"] = time.perf_counter()
-    timing["deadline"] = timing["start_time"] + RECORDING_SECONDS
+    timing["deadline"] = timing["start_time"] + speaking_seconds
     print("\nRecording started: microphone and camera are synchronized.")
     start_event.set()
 
@@ -178,40 +268,28 @@ def run_speech_session():
 
     pauses = detect_pauses(audio_path)
 
+    print("Analyzing topic relevance...")
+    relevance_result = None
+    try:
+        relevance_result = analyze_relevance(topic, text)
+    except Exception as e:
+        print(f"  Topic relevance analysis skipped: {e}")
+
     print("Analysis complete!")
 
-    print_report(
-        video_report,
-        total_words,
-        total_fillers,
-        pauses,
-        RECORDING_SECONDS,
-        text,
+    scores = print_report(
+        video_report=video_report,
+        total_words=total_words,
+        total_fillers=total_fillers,
+        pauses=pauses,
+        duration=speaking_seconds,
+        transcription=text,
+        topic=topic,
+        relevance_result=relevance_result,
+        filler_breakdown=fillers,
     )
 
-    # Build scores dict for database storage
-    from report import (
-        score_speech_fluency,
-        score_pause_management,
-        score_eye_contact,
-        score_head_stability,
-        score_speech_pace,
-    )
-
-    scores = {
-        "fluency": score_speech_fluency(total_words, total_fillers),
-        "pauses": score_pause_management(pauses, RECORDING_SECONDS),
-        "eye_contact": score_eye_contact(video_report),
-        "head_stability": score_head_stability(video_report),
-        "pace": score_speech_pace(total_words, RECORDING_SECONDS),
-        "relevance": None,
-        "total_words": total_words,
-        "total_fillers": total_fillers,
-    }
-    scores["overall"] = calculate_overall(scores)
-
-    category = "Speech Practice"
-    return category, topic, RECORDING_SECONDS, audio_path, video_path, text, scores
+    return category, topic, speaking_seconds, audio_path, video_path, text, scores
 
 
 if __name__ == "__main__":

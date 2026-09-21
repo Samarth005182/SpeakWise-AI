@@ -453,19 +453,126 @@ def generate_feedback(
 
 
 # ============================================================
+# WHAT WENT WRONG — DIAGNOSTIC ANALYSIS
+# ============================================================
+
+def generate_what_went_wrong(
+    fluency_score,
+    pause_score,
+    eye_score,
+    head_score,
+    pace_score,
+    relevance_score,
+    total_words,
+    total_fillers,
+    pauses,
+    duration,
+    video_report=None,
+    relevance_result=None,
+    filler_breakdown=None,
+):
+    """
+    Diagnose specific mistakes, flaws, and issues that degraded speech performance.
+    Returns a list of specific, diagnostic observations explaining what went wrong.
+    """
+    flaws = []
+
+    # 1. Filler Words & Disfluencies
+    filler_pct = (total_fillers / total_words * 100.0) if total_words > 0 else 0.0
+    if total_fillers > 0 or fluency_score < 8.0:
+        breakdown_str = ""
+        if filler_breakdown:
+            items = [f"'{k}' x{v}" for k, v in filler_breakdown.items() if v > 0]
+            if items:
+                breakdown_str = f" ({', '.join(items)})"
+
+        if filler_pct > 5.0 or total_fillers >= 4:
+            flaws.append(
+                f"High filler word usage: Spoke {total_fillers} filler words{breakdown_str}, "
+                f"making up {filler_pct:.1f}% of your speech (recommended: < 2%)."
+            )
+        elif total_fillers > 0:
+            flaws.append(
+                f"Disfluencies detected: {total_fillers} filler words{breakdown_str} "
+                f"interrupted vocal delivery."
+            )
+
+    # 2. Pacing & Word Volume
+    wpm = total_words / (duration / 60.0) if duration > 0 else 0
+    if wpm > 180:
+        flaws.append(
+            f"Rushed speech pace ({wpm:.0f} WPM): Spoke too rapidly (ideal: 120-160 WPM), making it hard for listeners to process ideas."
+        )
+    elif wpm < 100 and total_words > 0:
+        flaws.append(
+            f"Sluggish delivery pace ({wpm:.0f} WPM): Spoke too slowly (ideal: 120-160 WPM), lowering energy and audience engagement."
+        )
+
+    if total_words < 40 and duration >= 45:
+        flaws.append(
+            f"Low content volume: Only spoke {total_words} words in {duration}s, leaving substantial dead air and underdeveloped thoughts."
+        )
+
+    # 3. Hesitations & Long Silences
+    if pauses:
+        avg_pause = sum(pauses) / len(pauses)
+        longest_pause = max(pauses)
+        if longest_pause >= 3.0:
+            flaws.append(
+                f"Long awkward silence: Longest pause lasted {longest_pause:.1f}s, causing noticeable hesitation in speech flow."
+            )
+        if len(pauses) > 6 or (len(pauses) > 3 and avg_pause > 1.8):
+            flaws.append(
+                f"Frequent hesitation stops: Paused {len(pauses)} times (averaging {avg_pause:.1f}s each), signaling uncertainty."
+            )
+
+    # 4. Camera Eye Contact
+    if video_report is not None and eye_score is not None:
+        eye_data = video_report.get("eye_contact", {})
+        eye_pct = eye_data.get("contact_percentage", 0.0)
+        if eye_pct < 70.0:
+            flaws.append(
+                f"Low camera eye contact: Looked at the camera only {eye_pct:.0f}% of the time "
+                f"(gaze drifted away/down {100.0 - eye_pct:.0f}% of the time)."
+            )
+
+    # 5. Head Stability & Centering
+    if video_report is not None and head_score is not None:
+        head_data = video_report.get("head_position", {})
+        head_pct = head_data.get("percentage", 0.0)
+        if head_pct < 70.0:
+            flaws.append(
+                f"Excessive head movement: Kept head centered only {head_pct:.0f}% of the time "
+                f"(frequent looking sideways, down, or tilting away from camera)."
+            )
+
+    # 6. Topic Relevance & Tangents
+    if relevance_result is not None:
+        rel_score = relevance_result.get("score")
+        off_topic_sentences = relevance_result.get("off_topic_sentences", [])
+        if rel_score is not None and rel_score < 7.0:
+            flaws.append(
+                f"Topic drift: Content relevance scored {rel_score:.1f}/10, drifting away from the core subject."
+            )
+        if off_topic_sentences:
+            examples = "; ".join(f'"{s}"' for s in off_topic_sentences[:3])
+            flaws.append(
+                f"Off-topic remarks identified by AI: {examples}"
+            )
+
+    if not flaws:
+        flaws.append("No major flaws detected! Clean speech delivery, steady eye contact, and focused content.")
+
+    return flaws
+
+
+# ============================================================
 # OVERALL SCORE
 # ============================================================
 
 def calculate_overall(scores):
     """
     Weighted average of all available scores.
-
-    Weights:
-        Speech fluency:    25%
-        Pause management:  15%
-        Eye contact:       25%
-        Head stability:    15%
-        Speech pace:       20%
     """
 
     weights = {
@@ -481,9 +588,7 @@ def calculate_overall(scores):
     weighted_sum = 0.0
 
     for key, weight in weights.items():
-
         value = scores.get(key)
-
         if value is not None:
             weighted_sum += value * weight
             total_weight += weight
@@ -507,10 +612,14 @@ def print_report(
     transcription="",
     topic="",
     relevance_result=None,
+    filler_breakdown=None,
 ):
     """
     Print the full SpeakWise AI performance report
-    with scores out of 10 and actionable feedback.
+    with scores out of 10, 'What Went Wrong' analysis, and actionable feedback.
+
+    Returns:
+        dict: Complete report and scoring dictionary.
     """
 
     # --------------------------------------------------------
@@ -528,14 +637,8 @@ def print_report(
     )
 
     eye = score_eye_contact(video_report)
-
     head = score_head_stability(video_report)
-
-    pace = score_speech_pace(
-        total_words,
-        duration,
-    )
-
+    pace = score_speech_pace(total_words, duration)
     relevance = score_topic_relevance(relevance_result)
 
     scores = {
@@ -548,10 +651,27 @@ def print_report(
     }
 
     overall = calculate_overall(scores)
+    scores["overall"] = overall
 
     # --------------------------------------------------------
-    # Generate feedback
+    # Generate diagnostics and feedback
     # --------------------------------------------------------
+
+    what_went_wrong = generate_what_went_wrong(
+        fluency,
+        pause_mgmt,
+        eye,
+        head,
+        pace,
+        relevance,
+        total_words,
+        total_fillers,
+        pauses,
+        duration,
+        video_report=video_report,
+        relevance_result=relevance_result,
+        filler_breakdown=filler_breakdown,
+    )
 
     strengths, improvements = generate_feedback(
         fluency,
@@ -573,12 +693,12 @@ def print_report(
     # --------------------------------------------------------
 
     print()
-    print("=" * 54)
-    print("         SPEAKWISE AI — PERFORMANCE REPORT")
-    print("=" * 54)
+    print("=" * 60)
+    print("             SPEAKWISE AI - PERFORMANCE REPORT")
+    print("=" * 60)
 
     # --------------------------------------------------------
-    # Transcription
+    # Topic & Transcription
     # --------------------------------------------------------
 
     if topic:
@@ -611,14 +731,13 @@ def print_report(
     ]
 
     for label, value in score_items:
-
         if value is None:
-            print(f"  {label:<20} {'N/A':>6}   (video unavailable)")
+            print(f"  {label:<20} {'N/A':>6}   (video/relevance unavailable)")
             continue
 
         filled = int(round(value / 10.0 * bar_width))
         empty = bar_width - filled
-        bar = "█" * filled + "░" * empty
+        bar = "[" + "#" * filled + "." * empty + "]"
 
         print(
             f"  {label:<20} {value:>4}/10  "
@@ -630,18 +749,18 @@ def print_report(
     # --------------------------------------------------------
 
     print()
-    print("-" * 54)
+    print("-" * 60)
 
     filled = int(round(overall / 10.0 * bar_width))
     empty = bar_width - filled
-    bar = "█" * filled + "░" * empty
+    bar = "[" + "#" * filled + "." * empty + "]"
 
     print(
         f"  {'OVERALL RATING':<20} {overall:>4}/10  "
         f"  {bar}"
     )
 
-    print("-" * 54)
+    print("-" * 60)
 
     # --------------------------------------------------------
     # Quick stats
@@ -685,6 +804,19 @@ def print_report(
         )
 
     # --------------------------------------------------------
+    # What Went Wrong (Specific Flaws Detected)
+    # --------------------------------------------------------
+
+    print()
+    print("--- What Went Wrong (Specific Flaws & Mistakes) ---")
+    print()
+    for item in what_went_wrong:
+        if item.startswith("No major"):
+            print(f"  [OK] {item}")
+        else:
+            print(f"  [!] {item}")
+
+    # --------------------------------------------------------
     # Strengths
     # --------------------------------------------------------
 
@@ -701,10 +833,10 @@ def print_report(
 
     if improvements:
         print()
-        print("--- Areas to Improve ---")
+        print("--- Actionable Advice ---")
         print()
         for item in improvements:
-            print(f"  [-] {item}")
+            print(f"  [->] {item}")
 
     # --------------------------------------------------------
     # Encouragement
@@ -714,24 +846,41 @@ def print_report(
 
     if overall >= 8.0:
         print(
-            "  ★ Outstanding performance! "
+            "  * Outstanding performance! "
             "Keep up the excellent work."
         )
     elif overall >= 6.0:
         print(
-            "  ★ Solid effort! Focus on the areas above "
-            "and you'll improve quickly."
+            "  * Solid effort! Review 'What Went Wrong' above "
+            "to sharpen your next speech."
         )
     elif overall >= 4.0:
         print(
-            "  ★ Good start! Practice regularly and "
-            "you'll see noticeable progress."
+            "  * Good start! Work through the points above and "
+            "you'll see rapid progress."
         )
     else:
         print(
-            "  ★ Every expert was once a beginner. "
+            "  * Every expert was once a beginner. "
             "Keep practicing — you'll get there!"
         )
 
     print()
-    print("=" * 54)
+    print("=" * 60)
+
+    # Return structured report dict for database persistence
+    return {
+        "fluency": fluency,
+        "pauses": pause_mgmt,
+        "eye_contact": eye,
+        "head_stability": head,
+        "pace": pace,
+        "relevance": relevance,
+        "overall": overall,
+        "total_words": total_words,
+        "total_fillers": total_fillers,
+        "what_went_wrong": what_went_wrong,
+        "strengths": strengths,
+        "improvements": improvements,
+    }
+

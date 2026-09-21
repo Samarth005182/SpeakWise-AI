@@ -422,6 +422,11 @@ def view_my_sessions(user):
                     rep_data = json.loads(report_raw) if isinstance(report_raw, str) and report_raw.startswith("{") else None
                     if rep_data and "overall" in rep_data:
                         print(f"  Overall Score : {rep_data.get('overall')}/10")
+                    flaws = rep_data.get("what_went_wrong", []) if rep_data else []
+                    if flaws and not (len(flaws) == 1 and flaws[0].startswith("No major")):
+                        print("  What Went Wrong:")
+                        for flaw in flaws[:2]:
+                            print(f"    - {flaw}")
                 except Exception:
                     pass
 

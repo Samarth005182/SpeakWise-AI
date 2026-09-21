@@ -11,6 +11,7 @@ RETRY_DELAY = 3  # base seconds between retries (exponential backoff)
 # Models to try in order — if one is overloaded or deprecated, try the next
 FALLBACK_MODELS = [
     "gemini-3.6-flash",
+    "gemini-2.5-flash",
     "gemini-2.0-flash",
     "gemini-1.5-flash",
 ]
@@ -59,12 +60,13 @@ def _connect_with_fallback(client, setup_message):
     ) from last_error
 
 
-def ai_prepare(topic, time_limit=120):
+def ai_prepare(topic, time_limit=120, speaking_time=60):
     """Interactive AI chat to help the user prepare for their speech topic.
 
     Args:
         topic: The speech topic the user needs to prepare for.
         time_limit: Seconds allowed for AI-assisted preparation.
+        speaking_time: Target speech delivery duration in seconds.
     """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -72,15 +74,17 @@ def ai_prepare(topic, time_limit=120):
 
     client = genai.Client(api_key=api_key)
 
+    time_desc = f"{speaking_time // 60} minute(s)" if speaking_time % 60 == 0 else f"{speaking_time} seconds"
+
     # Send an initial system-like message to set context
     setup_message = (
         f"You are a helpful speech coach. The user has been given the topic: "
         f"\"{topic}\". Help them brainstorm key points, structure their speech, "
-        f"and prepare to speak about this topic for 1 minute. Keep your responses "
+        f"and prepare to speak about this topic for {time_desc}. Keep your responses "
         f"concise and actionable. Start by giving them 3-4 key talking points."
     )
 
-    print(f"AI Coach is ready! Ask questions about \"{topic}\" to prepare.")
+    print(f"AI Coach is ready! Ask questions about \"{topic}\" to prepare ({time_desc} speech).")
     print(f"You have {time_limit} seconds. Type 'done' to finish early.\n")
 
     print("Connecting to AI Coach...")
