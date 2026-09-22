@@ -60,6 +60,95 @@ def _connect_with_fallback(client, setup_message):
     ) from last_error
 
 
+class CoachChatSession:
+    """Manages multi-turn conversation with Gemini AI speech coach."""
+
+    def __init__(self, topic, user_name="Speaker", speaking_time_desc="2 minutes"):
+        self.topic = topic
+        self.user_name = user_name
+        self.speaking_time_desc = speaking_time_desc
+        self.chat = None
+        self.client = None
+        self.is_connected = False
+        self._init_session()
+
+    def _init_session(self):
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            return
+
+        try:
+            self.client = genai.Client(api_key=api_key)
+            setup_prompt = (
+                f"You are SpeakWise Coach, an encouraging and expert AI speech preparation assistant. "
+                f"The user '{self.user_name}' is preparing to deliver a speech on '{self.topic}' "
+                f"with target duration {self.speaking_time_desc}. "
+                f"Provide concise, practical, structured suggestions (bullet points, hooks, examples, structures). "
+                f"Keep answers punchy, motivating, and easy to read quickly."
+            )
+            self.chat, _ = _connect_with_fallback(self.client, setup_prompt)
+            self.is_connected = True
+        except Exception as e:
+            print(f"[CoachChatSession Notice] Offline fallback active: {e}")
+            self.is_connected = False
+
+    def send_message(self, message):
+        """Send message to coach and return response string."""
+        if self.is_connected and self.chat:
+            try:
+                res = _send_with_retry(self.chat, message)
+                if res and res.text:
+                    return res.text.strip()
+            except Exception as e:
+                print(f"[CoachChatSession] Live send failed: {e}, using smart fallback")
+
+        # Smart contextual fallback response
+        msg_lower = message.lower()
+        topic = self.topic
+
+        if "intro" in msg_lower or "hook" in msg_lower:
+            return (
+                f"Here is an engaging opening hook for '{topic}':\n\n"
+                f"\"Imagine standing at the intersection where {topic.lower()} shapes everything we do. "
+                f"Today, I want to explore why this matters and what it means for our future.\"\n\n"
+                f"💡 Pro Tip: Open with steady eye contact and pause for 2 seconds after the opening line."
+            )
+        elif "talking point" in msg_lower or "point" in msg_lower or "theor" in msg_lower or "main" in msg_lower:
+            return (
+                f"Here are the core talking points for your speech on {topic}:\n\n"
+                f"1. Introduction & Context\n"
+                f"   - Define the essence of {topic.lower()} and its historical or modern significance.\n\n"
+                f"2. Core Concepts & Practical Examples\n"
+                f"   - Share 1-2 concrete facts or stories that bring the topic to life.\n\n"
+                f"3. Key Debates & Future Impact\n"
+                f"   - What are the major perspectives or challenges surrounding it?\n\n"
+                f"4. Powerful Conclusion\n"
+                f"   - Reiterate your main thesis and leave the audience with a memorable takeaway.\n\n"
+                f"Would you like me to expand on any of these sections?"
+            )
+        elif "conclusion" in msg_lower or "conclude" in msg_lower or "ending" in msg_lower:
+            return (
+                f"Here is a powerful closing structure for '{topic}':\n\n"
+                f"\"In conclusion, {topic.lower()} is not just an intriguing subject—it is a mirror to how we innovate and grow. "
+                f"If there is one thing to take away today, it is that understanding this empowers us to make better decisions. Thank you.\""
+            )
+        elif "fact" in msg_lower or "interesting" in msg_lower or "angle" in msg_lower:
+            return (
+                f"Here are 3 fascinating angles you can weave into '{topic}':\n\n"
+                f"• Perspective 1: The unexpected origin and how it evolved over time.\n"
+                f"• Perspective 2: A counter-intuitive truth that surprises most listeners.\n"
+                f"• Perspective 3: The human element—how everyday people are impacted by it.\n\n"
+                f"Choose 1 of these to keep your speech focused and memorable!"
+            )
+        else:
+            return (
+                f"Great question! When presenting on '{topic}', always aim for clarity over complexity. "
+                f"Structure your answer into: (1) Main claim, (2) Supporting evidence or example, and (3) Listener relevance. "
+                f"Keep your pacing around 120-140 words per minute for optimal engagement."
+            )
+
+
+
 def ai_prepare(topic, time_limit=120, speaking_time=60):
     """Interactive AI chat to help the user prepare for their speech topic.
 

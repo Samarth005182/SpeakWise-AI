@@ -85,6 +85,7 @@ class FrameResult:
     pitch: float | None = None
     roll: float | None = None
 
+    is_blinking: bool = False
     state: str = "face_missing"
 
 
@@ -121,8 +122,31 @@ def angle_difference(angle, baseline):
 
 
 # ============================================================
-# EYE GAZE
+# EYE GAZE & BLINK
 # ============================================================
+
+def calculate_ear(landmarks, eye_points):
+    """Calculate Eye Aspect Ratio (EAR) for blink detection."""
+    try:
+        pts = landmarks[eye_points]
+        # eye_points: [p1(outer), p4(inner), p2(top1), p6(bottom1), p3(top2), p5(bottom2)]
+        p1 = pts[0, :2]
+        p4 = pts[1, :2]
+        p2 = pts[2, :2]
+        p6 = pts[3, :2]
+        p3 = pts[4, :2]
+        p5 = pts[5, :2]
+
+        vertical_1 = np.linalg.norm(p2 - p6)
+        vertical_2 = np.linalg.norm(p3 - p5)
+        horizontal = np.linalg.norm(p1 - p4)
+
+        if horizontal < 1e-6:
+            return 0.3
+        return float((vertical_1 + vertical_2) / (2.0 * horizontal))
+    except Exception:
+        return 0.3
+
 
 def get_eye_gaze(landmarks, eye_points, iris_point):
     """
@@ -153,6 +177,7 @@ def get_eye_gaze(landmarks, eye_points, iris_point):
     y = (iris[1] - y0) / (y1 - y0)
 
     return float(x), float(y)
+
 
 
 # ============================================================
@@ -435,25 +460,33 @@ def classify_face(
     roll_difference = 0.0
 
     if frame.yaw is not None:
-
         yaw_difference = angle_difference(
             frame.yaw,
             calibration["yaw"],
         )
 
     if frame.pitch is not None:
-
         pitch_difference = angle_difference(
             frame.pitch,
             calibration["pitch"],
         )
 
     if frame.roll is not None:
-
         roll_difference = angle_difference(
             frame.roll,
             calibration["roll"],
         )
+
+    # --------------------------------------------------------
+    # Head turned
+    # --------------------------------------------------------
+
+    if abs(yaw_difference) > YAW_TOLERANCE:
+        return "head_turned"
+
+    # If the user is simply blinking while facing the camera, retain contact
+    if getattr(frame, "is_blinking", False):
+        return "camera_contact"
 
     # --------------------------------------------------------
     # Iris differences
@@ -466,42 +499,28 @@ def classify_face(
     right_dy = 0.0
 
     if frame.left_x is not None:
-
         left_dx = frame.left_x - calibration["left_x"]
 
     if frame.left_y is not None:
-
         left_dy = frame.left_y - calibration["left_y"]
 
     if frame.right_x is not None:
-
         right_dx = frame.right_x - calibration["right_x"]
 
     if frame.right_y is not None:
-
         right_dy = frame.right_y - calibration["right_y"]
 
     avg_dx = (left_dx + right_dx) / 2.0
     avg_dy = (left_dy + right_dy) / 2.0
 
     # --------------------------------------------------------
-    # Head turned
-    # --------------------------------------------------------
-
-    if abs(yaw_difference) > YAW_TOLERANCE:
-
-        return "head_turned"
-
-    # --------------------------------------------------------
     # Looking up/down
     # --------------------------------------------------------
 
     if avg_dy < -GAZE_Y_TOLERANCE:
-
         return "looking_up"
 
     if avg_dy > GAZE_Y_TOLERANCE:
-
         return "looking_down"
 
     # --------------------------------------------------------
@@ -509,11 +528,9 @@ def classify_face(
     # --------------------------------------------------------
 
     if avg_dx < -GAZE_X_TOLERANCE:
-
         return "looking_left"
 
     if avg_dx > GAZE_X_TOLERANCE:
-
         return "looking_right"
 
     # --------------------------------------------------------
@@ -521,6 +538,7 @@ def classify_face(
     # --------------------------------------------------------
 
     return "camera_contact"
+
 
 
 # ============================================================
@@ -774,7 +792,7 @@ def process_video(
                 frame_result.face_detected = True
 
                 # --------------------------------------------
-                # Iris
+                # Iris & Blink
                 # --------------------------------------------
 
                 (
@@ -795,6 +813,11 @@ def process_video(
                     RIGHT_IRIS,
                 )
 
+                left_ear = calculate_ear(landmarks, LEFT_EYE)
+                right_ear = calculate_ear(landmarks, RIGHT_EYE)
+                avg_ear = (left_ear + right_ear) / 2.0
+                frame_result.is_blinking = (avg_ear < 0.17)
+
                 # --------------------------------------------
                 # Head pose
                 # --------------------------------------------
@@ -813,6 +836,7 @@ def process_video(
             frame_index += 1
 
     finally:
+
 
         cap.release()
         landmarker.close()
@@ -868,12 +892,12 @@ def calculate_head_position(frames, calibration):
     total_pose_time = 0.0
 
     if len(frames) < 2:
-
         return {
             "forward_time": 0.0,
             "total_pose_time": 0.0,
             "percentage": 0.0,
             "longest_steady": 0.0,
+            "face_detected": False,
         }
 
     baseline_yaw = calibration.get("yaw", 0.0)
@@ -888,10 +912,7 @@ def calculate_head_position(frames, calibration):
         frame = frames[i]
         next_frame = frames[i + 1]
 
-        if frame.timestamp is None:
-            continue
-
-        if next_frame.timestamp is None:
+        if frame.timestamp is None or next_frame.timestamp is None:
             continue
 
         delta = (
@@ -947,17 +968,22 @@ def calculate_head_position(frames, calibration):
 
             current_steady = 0.0
 
-    percentage = (
-        forward_time / total_pose_time * 100.0
-        if total_pose_time > 0
-        else 0.0
-    )
+    # If pose was detectable for less than 1.5 seconds, do not award high percentage
+    if total_pose_time < 1.5:
+        percentage = 0.0
+    else:
+        percentage = (
+            forward_time / total_pose_time * 100.0
+            if total_pose_time > 0
+            else 0.0
+        )
 
     return {
         "forward_time": forward_time,
         "total_pose_time": total_pose_time,
         "percentage": percentage,
         "longest_steady": longest_steady,
+        "face_detected": total_pose_time >= 1.5,
     }
 
 
@@ -968,7 +994,6 @@ def calculate_head_position(frames, calibration):
 def calculate_eye_contact(frames):
 
     if not frames:
-
         return {
             "contact_time": 0.0,
             "trackable_time": 0.0,
@@ -977,6 +1002,7 @@ def calculate_eye_contact(frames):
             "confidence": 0.0,
             "longest_streak": 0.0,
             "times_looked_away": 0,
+            "face_detected": False,
         }
 
     contact_time = 0.0
@@ -1009,13 +1035,11 @@ def calculate_eye_contact(frames):
             delta = 1.0 / 30.0
 
         if frame.face_detected:
-
             trackable_time += delta
 
         if frame.state == "camera_contact":
 
             contact_time += delta
-
             current_streak += delta
 
             longest_streak = max(
@@ -1028,39 +1052,38 @@ def calculate_eye_contact(frames):
         else:
 
             if previous_contact:
-
                 times_looked_away += 1
 
             previous_contact = False
             current_streak = 0.0
 
+    video_duration = frames[-1].timestamp if frames[-1].timestamp else 1.0
+
     overall_percentage = (
         contact_time
-        / (
-            frames[-1].timestamp
-            if frames[-1].timestamp
-            else 1.0
-        )
+        / video_duration
         * 100.0
-    )
-
-    contact_percentage = (
-        contact_time
-        / trackable_time
-        * 100.0
-        if trackable_time > 0
-        else 0.0
     )
 
     confidence = (
         trackable_time
-        / (
-            frames[-1].timestamp
-            if frames[-1].timestamp
-            else 1.0
-        )
+        / video_duration
         * 100.0
     )
+
+    # Guard against giving 100% eye contact when face was only visible for 1 frame
+    if trackable_time < 1.5 or confidence < 15.0:
+        contact_percentage = 0.0
+        has_face = False
+    else:
+        contact_percentage = (
+            contact_time
+            / trackable_time
+            * 100.0
+            if trackable_time > 0
+            else 0.0
+        )
+        has_face = True
 
     return {
         "contact_time": contact_time,
@@ -1070,7 +1093,9 @@ def calculate_eye_contact(frames):
         "confidence": confidence,
         "longest_streak": longest_streak,
         "times_looked_away": times_looked_away,
+        "face_detected": has_face,
     }
+
 
 
 # ============================================================

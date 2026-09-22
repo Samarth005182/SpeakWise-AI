@@ -255,13 +255,10 @@ def run_speech_session():
     except (FileNotFoundError, RuntimeError, ValueError) as error:
         print(f"  Video analysis skipped: {error}")
 
-    text = transcribe_audio(audio_path)
-    if text is None:
-        print("\nTranscription failed.")
-        return None
-
+    text = transcribe_audio(audio_path) or ""
     words = text.split()
     total_words = len(words)
+
 
     fillers = detect_fillers(text)
     total_fillers = sum(fillers.values())
@@ -293,6 +290,17 @@ def run_speech_session():
 
 
 if __name__ == "__main__":
+    import sys
+
+    # Default to GUI mode unless --cli flag is passed
+    if "--cli" not in sys.argv:
+        try:
+            from gui import SpeakWiseApp
+            app = SpeakWiseApp()
+            app.mainloop()
+            sys.exit(0)
+        except Exception as e:
+            print(f"[!] GUI launch notice: {e}. Falling back to CLI mode.\n")
 
     while True:
         # --- Authentication Gate ---

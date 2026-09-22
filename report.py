@@ -1,5 +1,5 @@
 # ============================================================
-# SPEAKWISE AI — PERFORMANCE REPORT
+# SPEAKWISE AI — PERFORMANCE REPORT & EVALUATION ENGINE
 # ============================================================
 
 RECORDING_SECONDS = 60
@@ -9,19 +9,17 @@ RECORDING_SECONDS = 60
 # INDIVIDUAL SCORING FUNCTIONS
 # ============================================================
 
-def score_speech_fluency(total_words, total_fillers):
+def score_speech_fluency(total_words, total_fillers, duration=60):
     """
-    Score based on filler word percentage.
-
-    0% fillers     → 10
-    1-2% fillers   → 8-9
-    3-5% fillers   → 6-7
-    6-10% fillers  → 4-5
-    >10% fillers   → 1-3
+    Score based on filler word percentage and spoken volume.
+    If no words are spoken, returns 0.0.
     """
-
     if total_words == 0:
         return 0.0
+
+    # If the user barely spoke (e.g. < 8 words in 30+ seconds), penalize heavily
+    if total_words < 8 and duration >= 25:
+        return 1.0
 
     filler_pct = (total_fillers / total_words) * 100.0
 
@@ -47,22 +45,24 @@ def score_speech_fluency(total_words, total_fillers):
         return 1.0
 
 
-def score_pause_management(pauses, duration):
+def score_pause_management(pauses, duration, total_words=None):
     """
     Score based on pause count, average length,
     and longest pause relative to speech duration.
 
-    Few short pauses are natural and score well.
-    Many long pauses indicate hesitation.
+    If total_words is 0 (silence), returns 0.0.
     """
+    if total_words is not None and total_words == 0:
+        return 0.0
 
     if duration <= 0:
-        return 5.0
+        return 0.0
 
     num_pauses = len(pauses)
 
     if num_pauses == 0:
-        return 10.0
+        # If user spoke healthy amount and had 0 awkward pauses, score 10.0
+        return 10.0 if (total_words is None or total_words >= 15) else 3.0
 
     avg_pause = sum(pauses) / num_pauses
     longest = max(pauses)
@@ -98,17 +98,15 @@ def score_pause_management(pauses, duration):
 def score_eye_contact(video_report):
     """
     Score based on camera eye contact percentage.
-
-    90%+ → 10
-    80%+ → 9
-    ...
-    <20% → 1
+    Returns None if video was unavailable or face was not detectable.
     """
-
     if video_report is None:
         return None
 
     eye = video_report.get("eye_contact", {})
+    if not eye.get("face_detected", True) and eye.get("contact_percentage", 0.0) == 0:
+        return 1.0
+
     pct = eye.get("contact_percentage", 0.0)
 
     if pct >= 90:
@@ -136,12 +134,15 @@ def score_eye_contact(video_report):
 def score_head_stability(video_report):
     """
     Score based on head-forward percentage.
+    Returns None if video was unavailable or face was not detectable.
     """
-
     if video_report is None:
         return None
 
     head = video_report.get("head_position", {})
+    if not head.get("face_detected", True) and head.get("percentage", 0.0) == 0:
+        return 1.0
+
     pct = head.get("percentage", 0.0)
 
     if pct >= 90:
@@ -168,12 +169,9 @@ def score_head_stability(video_report):
 
 def score_speech_pace(total_words, duration):
     """
-    Score based on words per minute.
-
+    Score based on words per minute (WPM).
     Ideal range is 120-160 WPM for presentations.
-    Too slow or too fast both lose points.
     """
-
     if duration <= 0 or total_words == 0:
         return 0.0
 
@@ -196,12 +194,13 @@ def score_speech_pace(total_words, duration):
         return 1.0
 
 
-def score_topic_relevance(relevance_result):
+def score_topic_relevance(relevance_result, total_words=None):
     """
-    Extract the relevance score from the AI analysis result.
-
-    Returns None if no result is available.
+    Extract relevance score from AI analysis result.
+    If no words were spoken, returns 0.0.
     """
+    if total_words is not None and total_words == 0:
+        return 0.0
 
     if relevance_result is None:
         return None
@@ -211,245 +210,6 @@ def score_topic_relevance(relevance_result):
         return None
 
     return max(1.0, min(10.0, float(score)))
-
-
-# ============================================================
-# FEEDBACK GENERATION
-# ============================================================
-
-def generate_feedback(
-    fluency_score,
-    pause_score,
-    eye_score,
-    head_score,
-    pace_score,
-    relevance_score,
-    total_words,
-    total_fillers,
-    pauses,
-    duration,
-    video_report,
-    relevance_result,
-):
-    """
-    Generate lists of strengths and improvements
-    based on the individual scores and raw data.
-    """
-
-    strengths = []
-    improvements = []
-
-    # --------------------------------------------------------
-    # Speech fluency
-    # --------------------------------------------------------
-
-    filler_pct = (
-        (total_fillers / total_words * 100.0)
-        if total_words > 0
-        else 0.0
-    )
-
-    if fluency_score >= 8:
-        strengths.append(
-            "Excellent speech fluency — very few "
-            "filler words detected."
-        )
-    elif fluency_score >= 6:
-        strengths.append(
-            "Decent fluency with moderate filler "
-            "word usage."
-        )
-    else:
-        improvements.append(
-            f"Reduce filler words (um, uh, er, hmm). "
-            f"You used {total_fillers} fillers "
-            f"({filler_pct:.1f}% of speech). "
-            f"Practice pausing silently instead."
-        )
-
-    # --------------------------------------------------------
-    # Pause management
-    # --------------------------------------------------------
-
-    if pause_score >= 8:
-        strengths.append(
-            "Great pause management — your speech "
-            "flowed naturally without long hesitations."
-        )
-    elif pause_score >= 6:
-        strengths.append(
-            "Pause usage was acceptable, with only "
-            "occasional longer gaps."
-        )
-    else:
-        avg = (
-            sum(pauses) / len(pauses)
-            if pauses
-            else 0
-        )
-        improvements.append(
-            f"Work on reducing hesitation pauses. "
-            f"You had {len(pauses)} pauses averaging "
-            f"{avg:.1f}s each. Practice your key points "
-            f"to maintain smoother delivery."
-        )
-
-    # --------------------------------------------------------
-    # Eye contact
-    # --------------------------------------------------------
-
-    if eye_score is not None:
-
-        if eye_score >= 8:
-            strengths.append(
-                "Strong eye contact with the camera — "
-                "this builds trust and engagement "
-                "with your audience."
-            )
-        elif eye_score >= 6:
-            strengths.append(
-                "Moderate eye contact — you looked at "
-                "the camera for a good portion of "
-                "the time."
-            )
-        else:
-            eye_pct = video_report["eye_contact"].get(
-                "contact_percentage", 0
-            )
-            improvements.append(
-                f"Improve camera eye contact (currently "
-                f"{eye_pct:.0f}%). Try placing a small "
-                f"sticker near your webcam as a visual "
-                f"anchor to look at while speaking."
-            )
-
-    # --------------------------------------------------------
-    # Head stability
-    # --------------------------------------------------------
-
-    if head_score is not None:
-
-        if head_score >= 8:
-            strengths.append(
-                "Excellent head position — you stayed "
-                "camera-facing and steady throughout."
-            )
-        elif head_score >= 6:
-            strengths.append(
-                "Fairly stable head position with "
-                "some turning."
-            )
-        else:
-            head_pct = video_report["head_position"].get(
-                "percentage", 0
-            )
-            improvements.append(
-                f"Keep your head facing the camera "
-                f"more consistently (currently "
-                f"{head_pct:.0f}% forward). Avoid "
-                f"looking sideways or down while speaking."
-            )
-
-    # --------------------------------------------------------
-    # Speech pace
-    # --------------------------------------------------------
-
-    wpm = (
-        total_words / (duration / 60.0)
-        if duration > 0
-        else 0
-    )
-
-    if pace_score >= 8:
-        strengths.append(
-            f"Great speaking pace at {wpm:.0f} words "
-            f"per minute — clear and easy to follow."
-        )
-    elif pace_score >= 6:
-        if wpm < 120:
-            improvements.append(
-                f"Your pace ({wpm:.0f} WPM) is a bit "
-                f"slow. Try to speak slightly faster "
-                f"to keep your audience engaged."
-            )
-        else:
-            improvements.append(
-                f"Your pace ({wpm:.0f} WPM) is a bit "
-                f"fast. Try slowing down slightly to "
-                f"let your points land."
-            )
-    else:
-        if wpm < 80:
-            improvements.append(
-                f"Speaking pace is very slow ({wpm:.0f} "
-                f"WPM). Aim for 120-160 WPM for a "
-                f"natural conversational delivery."
-            )
-        elif wpm > 200:
-            improvements.append(
-                f"Speaking pace is too fast ({wpm:.0f} "
-                f"WPM). Slow down to 120-160 WPM so "
-                f"your audience can absorb your message."
-            )
-        else:
-            if wpm < 120:
-                improvements.append(
-                    f"Your pace ({wpm:.0f} WPM) could "
-                    f"use improvement. Aim for 120-160 "
-                    f"WPM for the best impact."
-                )
-            else:
-                improvements.append(
-                    f"Your pace ({wpm:.0f} WPM) could "
-                    f"use improvement. Aim for 120-160 "
-                    f"WPM for the best impact."
-                )
-
-    # Bonus: word count feedback
-    if total_words < 30:
-        improvements.append(
-            "You spoke very few words. Try to "
-            "elaborate more on your points to "
-            "fill the time effectively."
-        )
-
-    # --------------------------------------------------------
-    # Topic relevance
-    # --------------------------------------------------------
-
-    if relevance_score is not None:
-
-        if relevance_score >= 8:
-            strengths.append(
-                "Excellent topic relevance — your speech "
-                "stayed focused on the assigned subject."
-            )
-        elif relevance_score >= 6:
-            strengths.append(
-                "Good topic relevance — your speech mostly "
-                "addressed the assigned subject."
-            )
-        else:
-            improvements.append(
-                "Your speech drifted from the assigned "
-                "topic. Focus on staying on-subject and "
-                "relating your points back to the topic."
-            )
-
-        # Flag off-topic sentences
-        if relevance_result is not None:
-            off_topic = relevance_result.get(
-                "off_topic_sentences", []
-            )
-            if off_topic:
-                sentences = "; ".join(
-                    f'"{s}"' for s in off_topic[:5]
-                )
-                improvements.append(
-                    f"Off-topic sentences detected: {sentences}"
-                )
-
-    return strengths, improvements
 
 
 # ============================================================
@@ -477,7 +237,23 @@ def generate_what_went_wrong(
     """
     flaws = []
 
-    # 1. Filler Words & Disfluencies
+    # 0. Silence / Zero Words Spoken
+    if total_words == 0:
+        return [
+            "No Speech Detected: We couldn't detect any spoken words in your audio recording. "
+            "Please verify that your microphone is selected, not muted, and positioned close to you."
+        ]
+
+
+    # 1. Very Low Content Volume
+    wpm = total_words / (duration / 60.0) if duration > 0 else 0
+    if total_words < 25 and duration >= 30:
+        flaws.append(
+            f"Low content volume: Spoke only {total_words} words in {duration}s ({wpm:.0f} WPM). "
+            f"Aim for at least 100-140 words per minute to effectively develop your thoughts."
+        )
+
+    # 2. Filler Words & Disfluencies
     filler_pct = (total_fillers / total_words * 100.0) if total_words > 0 else 0.0
     if total_fillers > 0 or fluency_score < 8.0:
         breakdown_str = ""
@@ -488,65 +264,64 @@ def generate_what_went_wrong(
 
         if filler_pct > 5.0 or total_fillers >= 4:
             flaws.append(
-                f"High filler word usage: Spoke {total_fillers} filler words{breakdown_str}, "
-                f"making up {filler_pct:.1f}% of your speech (recommended: < 2%)."
+                f"High filler word usage: Used {total_fillers} filler words{breakdown_str}, "
+                f"accounting for {filler_pct:.1f}% of your speech (target: < 2%)."
             )
         elif total_fillers > 0:
             flaws.append(
-                f"Disfluencies detected: {total_fillers} filler words{breakdown_str} "
-                f"interrupted vocal delivery."
+                f"Disfluencies detected: {total_fillers} filler words{breakdown_str} interrupted vocal delivery."
             )
 
-    # 2. Pacing & Word Volume
-    wpm = total_words / (duration / 60.0) if duration > 0 else 0
+    # 3. Pacing
     if wpm > 180:
         flaws.append(
-            f"Rushed speech pace ({wpm:.0f} WPM): Spoke too rapidly (ideal: 120-160 WPM), making it hard for listeners to process ideas."
+            f"Rushed speech pace ({wpm:.0f} WPM): Spoke too rapidly (ideal: 120-160 WPM), making it hard for listeners to follow."
         )
-    elif wpm < 100 and total_words > 0:
+    elif wpm < 90 and total_words >= 25:
         flaws.append(
-            f"Sluggish delivery pace ({wpm:.0f} WPM): Spoke too slowly (ideal: 120-160 WPM), lowering energy and audience engagement."
+            f"Sluggish delivery pace ({wpm:.0f} WPM): Delivery was too slow (ideal: 120-160 WPM), which may lower audience engagement."
         )
 
-    if total_words < 40 and duration >= 45:
-        flaws.append(
-            f"Low content volume: Only spoke {total_words} words in {duration}s, leaving substantial dead air and underdeveloped thoughts."
-        )
-
-    # 3. Hesitations & Long Silences
+    # 4. Hesitations & Long Silences
     if pauses:
         avg_pause = sum(pauses) / len(pauses)
         longest_pause = max(pauses)
         if longest_pause >= 3.0:
             flaws.append(
-                f"Long awkward silence: Longest pause lasted {longest_pause:.1f}s, causing noticeable hesitation in speech flow."
+                f"Awkward silence: Longest hesitation pause lasted {longest_pause:.1f}s."
             )
         if len(pauses) > 6 or (len(pauses) > 3 and avg_pause > 1.8):
             flaws.append(
-                f"Frequent hesitation stops: Paused {len(pauses)} times (averaging {avg_pause:.1f}s each), signaling uncertainty."
+                f"Frequent pauses: Stopped {len(pauses)} times (averaging {avg_pause:.1f}s each), signaling hesitation."
             )
 
-    # 4. Camera Eye Contact
-    if video_report is not None and eye_score is not None:
+    # 5. Camera Eye Contact & Face Visibility
+    if video_report is not None:
         eye_data = video_report.get("eye_contact", {})
-        eye_pct = eye_data.get("contact_percentage", 0.0)
-        if eye_pct < 70.0:
+        if not eye_data.get("face_detected", True):
             flaws.append(
-                f"Low camera eye contact: Looked at the camera only {eye_pct:.0f}% of the time "
-                f"(gaze drifted away/down {100.0 - eye_pct:.0f}% of the time)."
+                "Face not clearly visible: Ensure your webcam is uncovered and well-lit so visual tracking can analyze your eye contact."
             )
+        else:
+            eye_pct = eye_data.get("contact_percentage", 0.0)
+            if eye_pct < 70.0 and eye_score is not None:
+                flaws.append(
+                    f"Low camera eye contact: Looked directly at the camera only {eye_pct:.0f}% of the time "
+                    f"(gaze drifted away {100.0 - eye_pct:.0f}% of the time)."
+                )
 
-    # 5. Head Stability & Centering
-    if video_report is not None and head_score is not None:
+    # 6. Head Stability & Centering
+    if video_report is not None:
         head_data = video_report.get("head_position", {})
-        head_pct = head_data.get("percentage", 0.0)
-        if head_pct < 70.0:
-            flaws.append(
-                f"Excessive head movement: Kept head centered only {head_pct:.0f}% of the time "
-                f"(frequent looking sideways, down, or tilting away from camera)."
-            )
+        if head_data.get("face_detected", True):
+            head_pct = head_data.get("percentage", 0.0)
+            if head_pct < 70.0 and head_score is not None:
+                flaws.append(
+                    f"Excessive head movement: Kept head centered only {head_pct:.0f}% of the time "
+                    f"(frequent looking sideways, down, or tilting away)."
+                )
 
-    # 6. Topic Relevance & Tangents
+    # 7. Topic Relevance & Tangents
     if relevance_result is not None:
         rel_score = relevance_result.get("score")
         off_topic_sentences = relevance_result.get("off_topic_sentences", [])
@@ -567,13 +342,122 @@ def generate_what_went_wrong(
 
 
 # ============================================================
-# OVERALL SCORE
+# FEEDBACK GENERATION
 # ============================================================
 
-def calculate_overall(scores):
+def generate_feedback(
+    fluency_score,
+    pause_score,
+    eye_score,
+    head_score,
+    pace_score,
+    relevance_score,
+    total_words,
+    total_fillers,
+    pauses,
+    duration,
+    video_report=None,
+    relevance_result=None,
+):
     """
-    Weighted average of all available scores.
+    Generate lists of strengths and actionable improvements.
     """
+    strengths = []
+    improvements = []
+
+    # Case: Silence
+    if total_words == 0:
+        strengths.append("Camera and microphone initialized properly.")
+        improvements.append("Ensure your microphone is enabled and not muted before starting.")
+        improvements.append("Speak at a clear, audible volume throughout the full time window.")
+        improvements.append("Try practicing with a quick 30-second session first to build momentum.")
+        return strengths, improvements
+
+    # 1. Fluency
+    filler_pct = (total_fillers / total_words * 100.0) if total_words > 0 else 0.0
+    if fluency_score >= 8.0:
+        strengths.append("Excellent speech fluency - very few filler words detected.")
+    elif fluency_score >= 6.0:
+        strengths.append("Decent fluency with moderate filler word usage.")
+    else:
+        improvements.append(
+            f"Reduce filler words (um, uh, like). You used {total_fillers} fillers ({filler_pct:.1f}% of speech). "
+            f"Practice pausing silently instead."
+        )
+
+    # 2. Pause Management
+    if pause_score >= 8.0:
+        strengths.append("Great pause management - speech flowed naturally without awkward stops.")
+    elif pause_score >= 6.0:
+        strengths.append("Acceptable pacing with only occasional hesitation gaps.")
+    else:
+        avg = sum(pauses) / len(pauses) if pauses else 0
+        improvements.append(
+            f"Work on reducing hesitation pauses ({len(pauses)} pauses averaging {avg:.1f}s each). "
+            f"Structure your talking points before speaking."
+        )
+
+    # 3. Eye Contact
+    if eye_score is not None:
+        if eye_score >= 8.0:
+            strengths.append("Strong eye contact with the camera - builds trust and audience connection.")
+        elif eye_score >= 6.0:
+            strengths.append("Moderate eye contact - looked at the camera for a good portion of time.")
+        else:
+            eye_pct = video_report["eye_contact"].get("contact_percentage", 0) if video_report else 0
+            improvements.append(
+                f"Improve camera eye contact (currently {eye_pct:.0f}%). "
+                f"Try placing a small visual anchor near your webcam."
+            )
+
+    # 4. Head Stability
+    if head_score is not None:
+        if head_score >= 8.0:
+            strengths.append("Excellent head stability - stayed camera-facing and steady.")
+        elif head_score >= 6.0:
+            strengths.append("Fairly stable posture with minor head movement.")
+        else:
+            head_pct = video_report["head_position"].get("percentage", 0) if video_report else 0
+            improvements.append(
+                f"Keep your head facing forward more consistently (currently {head_pct:.0f}% centered)."
+            )
+
+    # 5. Speech Pace
+    wpm = total_words / (duration / 60.0) if duration > 0 else 0
+    if pace_score >= 8.0:
+        strengths.append(f"Great speaking pace at {wpm:.0f} WPM - crisp and easy to follow.")
+    elif pace_score >= 6.0:
+        if wpm < 120:
+            improvements.append(f"Pace is slightly slow ({wpm:.0f} WPM). Aim for 120-160 WPM.")
+        else:
+            improvements.append(f"Pace is slightly fast ({wpm:.0f} WPM). Slow down slightly to let points land.")
+    else:
+        improvements.append(f"Adjust speaking pace ({wpm:.0f} WPM). Aim for 120-160 WPM for maximum clarity.")
+
+    # 6. Topic Relevance
+    if relevance_score is not None:
+        if relevance_score >= 8.0:
+            strengths.append("Outstanding topic relevance - stayed focused on the assigned subject.")
+        elif relevance_score >= 6.0:
+            strengths.append("Good topic relevance - mostly addressed the core subject.")
+        else:
+            improvements.append("Speech drifted from the topic. Tie your points directly back to the core subject.")
+
+
+    return strengths, improvements
+
+
+# ============================================================
+# OVERALL SCORE CALCULATION
+# ============================================================
+
+def calculate_overall(scores, total_words=None):
+    """
+    Calculate weighted average score (0.0 to 10.0).
+    If total_words == 0 (silent recording), overall score is strictly 0.0.
+    """
+    if total_words is not None and total_words == 0:
+        return 0.0
 
     weights = {
         "fluency": 0.20,
@@ -600,7 +484,7 @@ def calculate_overall(scores):
 
 
 # ============================================================
-# PRINT REPORT
+# PRINT & COMPILE REPORT
 # ============================================================
 
 def print_report(
@@ -615,31 +499,17 @@ def print_report(
     filler_breakdown=None,
 ):
     """
-    Print the full SpeakWise AI performance report
-    with scores out of 10, 'What Went Wrong' analysis, and actionable feedback.
-
-    Returns:
-        dict: Complete report and scoring dictionary.
+    Compile and print the complete SpeakWise AI performance report.
+    Returns a comprehensive dictionary for persistence and GUI rendering.
     """
+    is_silent = (total_words == 0 or not transcription.strip())
 
-    # --------------------------------------------------------
-    # Calculate all scores
-    # --------------------------------------------------------
-
-    fluency = score_speech_fluency(
-        total_words,
-        total_fillers,
-    )
-
-    pause_mgmt = score_pause_management(
-        pauses,
-        duration,
-    )
-
+    fluency = score_speech_fluency(total_words, total_fillers, duration=duration)
+    pause_mgmt = score_pause_management(pauses, duration, total_words=total_words)
     eye = score_eye_contact(video_report)
     head = score_head_stability(video_report)
     pace = score_speech_pace(total_words, duration)
-    relevance = score_topic_relevance(relevance_result)
+    relevance = score_topic_relevance(relevance_result, total_words=total_words)
 
     scores = {
         "fluency": fluency,
@@ -650,12 +520,8 @@ def print_report(
         "relevance": relevance,
     }
 
-    overall = calculate_overall(scores)
+    overall = calculate_overall(scores, total_words=total_words)
     scores["overall"] = overall
-
-    # --------------------------------------------------------
-    # Generate diagnostics and feedback
-    # --------------------------------------------------------
 
     what_went_wrong = generate_what_went_wrong(
         fluency,
@@ -688,39 +554,32 @@ def print_report(
         relevance_result,
     )
 
-    # --------------------------------------------------------
-    # Print header
-    # --------------------------------------------------------
+    wpm = int(round(total_words / (duration / 60.0))) if duration > 0 and total_words > 0 else 0
+    filler_pct = (total_fillers / total_words * 100.0) if total_words > 0 else 0.0
 
+    eye_pct = video_report.get("eye_contact", {}).get("contact_percentage", 0.0) if video_report else 0.0
+    head_pct = video_report.get("head_position", {}).get("percentage", 0.0) if video_report else 0.0
+
+    # --------------------------------------------------------
+    # Console Output
+    # --------------------------------------------------------
     print()
     print("=" * 60)
-    print("             SPEAKWISE AI - PERFORMANCE REPORT")
+    print("             SPEAKWISE AI -- PERFORMANCE REPORT")
     print("=" * 60)
-
-    # --------------------------------------------------------
-    # Topic & Transcription
-    # --------------------------------------------------------
 
     if topic:
-        print()
-        print(f"  Topic: \"{topic}\"")
+        print(f"\n  Topic: \"{topic}\"")
 
-    if transcription:
-        print()
-        print("--- What You Said ---")
-        print()
+    if is_silent:
+        print("\n  [!] [NO SPEECH DETECTED] The audio file did not contain audible speech.")
+    elif transcription:
+        print("\n--- What You Said ---")
         print(f"  {transcription}")
 
-    # --------------------------------------------------------
-    # Score breakdown
-    # --------------------------------------------------------
 
-    print()
-    print("--- Scores (out of 10) ---")
-    print()
-
+    print("\n--- Scores (out of 10) ---")
     bar_width = 20
-
     score_items = [
         ("Speech Fluency", fluency),
         ("Pause Management", pause_mgmt),
@@ -732,143 +591,40 @@ def print_report(
 
     for label, value in score_items:
         if value is None:
-            print(f"  {label:<20} {'N/A':>6}   (video/relevance unavailable)")
+            print(f"  {label:<20} {'N/A':>6}   (unavailable)")
             continue
 
         filled = int(round(value / 10.0 * bar_width))
         empty = bar_width - filled
         bar = "[" + "#" * filled + "." * empty + "]"
+        print(f"  {label:<20} {value:>4}/10    {bar}")
 
-        print(
-            f"  {label:<20} {value:>4}/10  "
-            f"  {bar}"
-        )
-
-    # --------------------------------------------------------
-    # Overall
-    # --------------------------------------------------------
-
-    print()
     print("-" * 60)
-
     filled = int(round(overall / 10.0 * bar_width))
     empty = bar_width - filled
     bar = "[" + "#" * filled + "." * empty + "]"
-
-    print(
-        f"  {'OVERALL RATING':<20} {overall:>4}/10  "
-        f"  {bar}"
-    )
-
+    print(f"  {'OVERALL RATING':<20} {overall:>4}/10    {bar}")
     print("-" * 60)
 
-    # --------------------------------------------------------
-    # Quick stats
-    # --------------------------------------------------------
-
-    print()
-    print("--- Quick Stats ---")
-    print()
-
-    wpm = (
-        total_words / (duration / 60.0)
-        if duration > 0
-        else 0
-    )
-
-    filler_pct = (
-        (total_fillers / total_words * 100.0)
-        if total_words > 0
-        else 0.0
-    )
-
-    print(f"  Words spoken:        {total_words}")
-    print(f"  Speaking pace:       {wpm:.0f} WPM")
-    print(f"  Filler words:        {total_fillers} ({filler_pct:.1f}%)")
-    print(f"  Pauses (>=0.5s):     {len(pauses)}")
-
-    if pauses:
-        print(f"  Longest pause:       {max(pauses):.2f}s")
-        print(f"  Average pause:       {sum(pauses) / len(pauses):.2f}s")
-
-    if video_report is not None:
-        eye_data = video_report.get("eye_contact", {})
-        head_data = video_report.get("head_position", {})
-        print(
-            f"  Eye contact:         "
-            f"{eye_data.get('contact_percentage', 0):.0f}%"
-        )
-        print(
-            f"  Head forward:        "
-            f"{head_data.get('percentage', 0):.0f}%"
-        )
-
-    # --------------------------------------------------------
-    # What Went Wrong (Specific Flaws Detected)
-    # --------------------------------------------------------
-
-    print()
-    print("--- What Went Wrong (Specific Flaws & Mistakes) ---")
-    print()
+    print("\n--- What Went Wrong (Specific Flaws & Mistakes) ---")
     for item in what_went_wrong:
         if item.startswith("No major"):
             print(f"  [OK] {item}")
         else:
             print(f"  [!] {item}")
 
-    # --------------------------------------------------------
-    # Strengths
-    # --------------------------------------------------------
-
     if strengths:
-        print()
-        print("--- What You Did Well ---")
-        print()
+        print("\n--- What You Did Well ---")
         for item in strengths:
             print(f"  [+] {item}")
 
-    # --------------------------------------------------------
-    # Improvements
-    # --------------------------------------------------------
-
     if improvements:
-        print()
-        print("--- Actionable Advice ---")
-        print()
+        print("\n--- Actionable Advice ---")
         for item in improvements:
             print(f"  [->] {item}")
 
-    # --------------------------------------------------------
-    # Encouragement
-    # --------------------------------------------------------
-
-    print()
-
-    if overall >= 8.0:
-        print(
-            "  * Outstanding performance! "
-            "Keep up the excellent work."
-        )
-    elif overall >= 6.0:
-        print(
-            "  * Solid effort! Review 'What Went Wrong' above "
-            "to sharpen your next speech."
-        )
-    elif overall >= 4.0:
-        print(
-            "  * Good start! Work through the points above and "
-            "you'll see rapid progress."
-        )
-    else:
-        print(
-            "  * Every expert was once a beginner. "
-            "Keep practicing — you'll get there!"
-        )
-
-    print()
     print("=" * 60)
 
-    # Return structured report dict for database persistence
     return {
         "fluency": fluency,
         "pauses": pause_mgmt,
@@ -879,8 +635,17 @@ def print_report(
         "overall": overall,
         "total_words": total_words,
         "total_fillers": total_fillers,
+        "filler_breakdown": filler_breakdown or {},
+        "filler_pct": filler_pct,
+        "pace_wpm": wpm,
+        "eye_contact_pct": eye_pct,
+        "head_centering_pct": head_pct,
+        "pauses_list": pauses,
         "what_went_wrong": what_went_wrong,
         "strengths": strengths,
         "improvements": improvements,
+        "is_silent": is_silent,
+        "transcription": transcription,
+        "topic": topic,
+        "duration": duration,
     }
-

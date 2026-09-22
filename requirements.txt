@@ -9,3 +9,5 @@ python-dotenv
 google-genai
 bcrypt
 mysql-connector-python
+customtkinter
+pillow

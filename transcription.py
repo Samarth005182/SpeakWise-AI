@@ -68,16 +68,62 @@ def load_model():
     return model
 
 
+import re
+from audio_text import is_audio_silent
+
+
+def _clean_transcription(text):
+    """Filter out common Whisper silence hallucinations and repetitive noise loops."""
+    if not text:
+        return ""
+
+    text = text.strip()
+
+    # Known Whisper hallucination phrases on silence or ambient noise
+    hallucinations = [
+        r"^\[BLANK_AUDIO\]$",
+        r"^\[silence\]$",
+        r"^\[music\]$",
+        r"^\[applause\]$",
+        r"^(thank you\W*){2,}$",
+        r"^(thanks for watching\W*)+$",
+        r"^(subtitles? by\W*)+.*$",
+        r"^(you\W*){4,}$",
+        r"^(\.\W*)+$",
+    ]
+
+    for pattern in hallucinations:
+        if re.match(pattern, text, re.IGNORECASE):
+            return ""
+
+    # Check for excessive word repetition (e.g. "word word word word word")
+    words = text.split()
+    if len(words) >= 5:
+        unique_words = set(w.lower().strip(".,!?;:\"'") for w in words)
+        if len(unique_words) == 1:
+            return ""
+
+    return text
+
+
 def transcribe_audio(audio_file):
-
+    """
+    Transcribe speech from an audio file.
+    If the audio contains silence/background noise only, returns "" immediately.
+    """
     if not os.path.exists(audio_file):
-
         print("ERROR: Audio file not found!")
+        return ""
 
-        return None
+    # Pre-check: if the audio has no speech energy, do not pass to Whisper
+    try:
+        if is_audio_silent(audio_file):
+            print("[Audio] Silence detected (no vocal activity). Skipping Whisper inference.")
+            return ""
+    except Exception as e:
+        print(f"[Audio Check Warning] {e}")
 
     try:
-
         whisper_model = load_model()
 
         result = whisper_model.transcribe(
@@ -86,11 +132,12 @@ def transcribe_audio(audio_file):
             language="en",
         )
 
-        return result.text
+        raw_text = result.text if result and hasattr(result, "text") else ""
+        cleaned_text = _clean_transcription(raw_text)
+
+        return cleaned_text
 
     except Exception as e:
-
         print("\nTranscription error:")
         print(e)
-
-        return None
+        return ""
