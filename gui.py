@@ -15,7 +15,17 @@ load_dotenv()
 
 # Backend imports
 import speakwise_database
-from speakwise_database import get_connection, initialize_database
+from speakwise_database import (
+    get_connection,
+    initialize_database,
+    register_user,
+    authenticate_user,
+    get_all_users,
+    get_user_sessions,
+    delete_user,
+    get_db_stats,
+    save_speech_session,
+)
 import login
 from login import hash_password, verify_password, save_session
 import topics
@@ -214,8 +224,19 @@ class SpeakWiseApp(ctk.CTk):
         return None
 
     def _init_user(self):
-        """Start as guest by default (no automatic admin login)."""
-        self.current_user = None
+        """Auto-load primary active user from MySQL so all speech sessions are saved to database."""
+        try:
+            users = get_all_users()
+            if users:
+                self.current_user = {
+                    "user_id": users[0]["user_id"],
+                    "name": users[0]["name"],
+                    "email": users[0]["email"],
+                }
+            else:
+                self.current_user = None
+        except Exception:
+            self.current_user = None
 
     # ============================================================
     # MAIN APP SHELL (SIDEBAR + TOP HEADER + MAIN CONTAINER)
@@ -2588,10 +2609,10 @@ class SpeakWiseApp(ctk.CTk):
                 filler_breakdown=fillers,
             )
 
-            # 6. Save in MySQL
+            # 6. Save in MySQL dynamically in real-time
             if self.current_user:
                 try:
-                    save_session(
+                    save_speech_session(
                         user_id=self.current_user["user_id"],
                         category=self.selected_category["name"],
                         topic_name=self.current_topic_data["title"],
@@ -2603,6 +2624,16 @@ class SpeakWiseApp(ctk.CTk):
                     )
                 except Exception as e:
                     print(f"[Save Error] {e}")
+            else:
+                self.last_unsaved_session = {
+                    "category": self.selected_category["name"],
+                    "topic_name": self.current_topic_data["title"],
+                    "speaking_time": dur,
+                    "audio_path": self.audio_path,
+                    "video_path": self.video_path,
+                    "transcription": transcription,
+                    "report": report_data,
+                }
 
             self.safe_after(0, lambda: self._render_results_ui(report_data, transcription))
 
@@ -4713,32 +4744,27 @@ class SpeakWiseApp(ctk.CTk):
 
         confirm = messagebox.askyesno(
             "Confirm Account Deletion",
-            f"Are you sure you want to permanently delete account '{self.current_user['name']}' ({self.current_user['email']})?",
+            f"Are you sure you want to permanently delete account '{self.current_user['name']}' ({self.current_user['email']}) from MySQL?",
         )
         if not confirm:
             return
 
-        try:
-            db = get_connection()
-            cursor = db.cursor()
-            cursor.execute("DELETE FROM users WHERE user_id = %s", (self.current_user["user_id"],))
-            db.commit()
-            cursor.close()
-            db.close()
-            messagebox.showinfo("Account Deleted", "Account deleted successfully.")
+        success, msg = delete_user(self.current_user["user_id"])
+        if success:
+            messagebox.showinfo("Account Deleted", "Your account and all speech takes were deleted from MySQL.")
             self.current_user = None
             self._update_current_user_ui()
             self._refresh_profile_content()
             self.show_page("home")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to delete account: {e}")
+        else:
+            messagebox.showerror("Error", f"Failed to delete account: {msg}")
 
     # ============================================================
-    # AUTH MODAL (LOGIN & REGISTER TABS)
+    # AUTH MODAL (LOGIN & REGISTER TABS - REAL-TIME MYSQL)
     # ============================================================
 
     def open_auth_modal(self, initial_tab="login"):
-        """Open modern modal dialog supporting both Login and New User Registration."""
+        """Open modern modal dialog supporting both Login and New User Registration with real-time MySQL persistence."""
         modal = ctk.CTkToplevel(self)
         modal.title("Account Authentication — SpeakWise AI")
         modal.geometry("520x640")
@@ -4811,40 +4837,20 @@ class SpeakWiseApp(ctk.CTk):
                     l_status.configure(text="Please enter both email/name and password.", text_color="#f87171")
                 return
 
-            try:
-                db = get_connection()
-                cursor = db.cursor(dictionary=True)
-                cursor.execute(
-                    "SELECT user_id, name, email, password FROM users WHERE LOWER(email) = LOWER(%s) OR LOWER(name) = LOWER(%s)",
-                    (ident, ident),
-                )
-                row = cursor.fetchone()
-                cursor.close()
-                db.close()
-
-                if row and verify_password(pw, row["password"]):
-                    self.current_user = {
-                        "user_id": row["user_id"],
-                        "name": row["name"],
-                        "email": row["email"],
-                    }
-                    self._update_current_user_ui()
-                    self._refresh_profile_content()
-                    try:
-                        modal.grab_release()
-                        modal.destroy()
-                    except Exception:
-                        pass
-                    messagebox.showinfo("Login Successful", f"Welcome back, {row['name']}!")
-                else:
-                    if l_status.winfo_exists():
-                        l_status.configure(text="Invalid email or password.", text_color="#f87171")
-            except Exception as e:
+            success, result = authenticate_user(ident, pw)
+            if success:
+                self.current_user = result
+                self._update_current_user_ui()
+                self._refresh_profile_content()
                 try:
-                    if l_status.winfo_exists():
-                        l_status.configure(text=f"Database error: {e}", text_color="#f87171")
+                    modal.grab_release()
+                    modal.destroy()
                 except Exception:
                     pass
+                messagebox.showinfo("Login Successful", f"Welcome back, {result['name']}!")
+            else:
+                if l_status.winfo_exists():
+                    l_status.configure(text=str(result), text_color="#f87171")
 
         btn_l_submit = ctk.CTkButton(
             tab_login,
@@ -4858,7 +4864,6 @@ class SpeakWiseApp(ctk.CTk):
         )
         btn_l_submit.pack(fill="x", padx=16, pady=(12, 10))
 
-        # Switch to Register prompt
         btn_switch_reg = ctk.CTkButton(
             tab_login,
             text="Don't have an account? Register here",
@@ -4871,7 +4876,7 @@ class SpeakWiseApp(ctk.CTk):
         btn_switch_reg.pack()
 
         # --------------------------------------------------------
-        # TAB 2: REGISTER NEW USER
+        # TAB 2: REGISTER NEW USER (REAL-TIME DYNAMIC MYSQL)
         # --------------------------------------------------------
         r_head = ctk.CTkLabel(
             tab_register,
@@ -4915,51 +4920,14 @@ class SpeakWiseApp(ctk.CTk):
                     r_status.configure(text="Please fill out all registration fields.", text_color="#f87171")
                 return
 
-            if "@" not in email_val or "." not in email_val:
-                if r_status.winfo_exists():
-                    r_status.configure(text="Please enter a valid email address.", text_color="#f87171")
-                return
-
-            if len(pw_val) < 6:
-                if r_status.winfo_exists():
-                    r_status.configure(text="Password must be at least 6 characters.", text_color="#f87171")
-                return
-
             if pw_val != confirm_val:
                 if r_status.winfo_exists():
                     r_status.configure(text="Passwords do not match.", text_color="#f87171")
                 return
 
-            try:
-                db = get_connection()
-                cursor = db.cursor(dictionary=True)
-
-                # Check if email exists
-                cursor.execute("SELECT user_id FROM users WHERE LOWER(email) = %s", (email_val,))
-                if cursor.fetchone():
-                    if r_status.winfo_exists():
-                        r_status.configure(text="Email is already registered. Please log in.", text_color="#f87171")
-                    cursor.close()
-                    db.close()
-                    return
-
-                # Hash password and insert
-                pw_hash = hash_password(pw_val)
-                cursor.execute(
-                    "INSERT INTO users (name, email, password) VALUES (%s, %s, %s)",
-                    (name_val, email_val, pw_hash),
-                )
-                db.commit()
-                new_user_id = cursor.lastrowid
-                cursor.close()
-                db.close()
-
-                # Set user as active & update UI
-                self.current_user = {
-                    "user_id": new_user_id,
-                    "name": name_val,
-                    "email": email_val,
-                }
+            success, result = register_user(name_val, email_val, pw_val)
+            if success:
+                self.current_user = result
                 self._update_current_user_ui()
                 self._refresh_profile_content()
                 try:
@@ -4967,14 +4935,10 @@ class SpeakWiseApp(ctk.CTk):
                     modal.destroy()
                 except Exception:
                     pass
-                messagebox.showinfo("Registration Successful", f"Welcome to SpeakWise AI, {name_val}! Your account is now active.")
-
-            except Exception as e:
-                try:
-                    if r_status.winfo_exists():
-                        r_status.configure(text=f"Registration failed: {e}", text_color="#f87171")
-                except Exception:
-                    pass
+                messagebox.showinfo("Registration Successful", f"Welcome to SpeakWise AI, {name_val}! Your account was dynamically added to MySQL in real-time.")
+            else:
+                if r_status.winfo_exists():
+                    r_status.configure(text=str(result), text_color="#f87171")
 
         btn_r_submit = ctk.CTkButton(
             tab_register,
@@ -5000,12 +4964,23 @@ class SpeakWiseApp(ctk.CTk):
         btn_switch_login.pack()
 
     def _update_current_user_ui(self):
-        """Update top bar user badge and initials upon login/register/logout."""
+        """Update top bar user badge and initials upon login/register/logout and flush pending takes."""
         if self.current_user:
             u_name = self.current_user.get("name", "User")
             initials = "".join([part[0].upper() for part in u_name.split()[:2]]) or "U"
             role_text = "Student"
             circle_bg = ACCENT_BLUE
+
+            # Auto-save any buffered session from guest practice into MySQL
+            if getattr(self, "last_unsaved_session", None):
+                try:
+                    save_speech_session(
+                        user_id=self.current_user["user_id"],
+                        **self.last_unsaved_session,
+                    )
+                    self.last_unsaved_session = None
+                except Exception as e:
+                    print(f"[Auto-Save Session Error] {e}")
         else:
             u_name = "Sign In / Register"
             initials = "👤"
@@ -5022,32 +4997,118 @@ class SpeakWiseApp(ctk.CTk):
         if hasattr(self, "home_container"):
             self._render_home_content()
 
+    def _open_database_inspector(self):
+        """Open real-time MySQL database table and user inspector."""
+        modal = ctk.CTkToplevel(self)
+        modal.title("MySQL Database Tables & Users — SpeakWise AI")
+        modal.geometry("700x520")
+        modal.configure(fg_color=BG_DARK)
+
+        # Center on parent
+        modal.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() // 2) - 350
+        y = self.winfo_y() + (self.winfo_height() // 2) - 260
+        modal.geometry(f"+{x}+{y}")
+
+        box = ctk.CTkFrame(modal, fg_color=CARD_BG, corner_radius=16, border_width=1, border_color=CARD_BORDER)
+        box.pack(fill="both", expand=True, padx=20, pady=20)
+
+        header = ctk.CTkLabel(box, text="🗄️ MySQL Database Tables & Records", font=ctk.CTkFont(family="Segoe UI", size=20, weight="bold"), text_color=TEXT_WHITE)
+        header.pack(anchor="w", padx=20, pady=(20, 4))
+
+        stats = get_db_stats() or {"users": 0, "sessions": 0, "takes": 0}
+        sub = ctk.CTkLabel(
+            box,
+            text=f"Connected to MySQL (`speakwise`)  •  Total Users: {stats['users']}  •  Total Sessions: {stats['sessions']}  •  Total Takes: {stats['takes']}",
+            font=ctk.CTkFont(size=12),
+            text_color=ACCENT_CYAN,
+        )
+        sub.pack(anchor="w", padx=20, pady=(0, 16))
+
+        # Users table display
+        tbl_frame = ctk.CTkScrollableFrame(box, fg_color="#0c111a", corner_radius=10)
+        tbl_frame.pack(fill="both", expand=True, padx=20, pady=(0, 16))
+
+        # Header row
+        h_row = ctk.CTkFrame(tbl_frame, fg_color="#182334", corner_radius=6)
+        h_row.pack(fill="x", pady=2, ipady=4)
+        ctk.CTkLabel(h_row, text="User ID", width=70, font=ctk.CTkFont(weight="bold", size=12), text_color=TEXT_WHITE).pack(side="left", padx=4)
+        ctk.CTkLabel(h_row, text="Name", width=180, font=ctk.CTkFont(weight="bold", size=12), text_color=TEXT_WHITE, anchor="w").pack(side="left", padx=4)
+        ctk.CTkLabel(h_row, text="Email", width=240, font=ctk.CTkFont(weight="bold", size=12), text_color=TEXT_WHITE, anchor="w").pack(side="left", padx=4)
+        ctk.CTkLabel(h_row, text="Sessions", width=80, font=ctk.CTkFont(weight="bold", size=12), text_color=TEXT_WHITE).pack(side="left", padx=4)
+
+        users = get_all_users()
+        for u in users:
+            u_row = ctk.CTkFrame(tbl_frame, fg_color="transparent")
+            u_row.pack(fill="x", pady=2, ipady=3)
+            ctk.CTkLabel(u_row, text=f"#{u['user_id']}", width=70, font=ctk.CTkFont(size=12), text_color=ACCENT_BLUE).pack(side="left", padx=4)
+            ctk.CTkLabel(u_row, text=u['name'], width=180, font=ctk.CTkFont(size=12), text_color=TEXT_WHITE, anchor="w").pack(side="left", padx=4)
+            ctk.CTkLabel(u_row, text=u['email'], width=240, font=ctk.CTkFont(size=12), text_color=TEXT_MUTED, anchor="w").pack(side="left", padx=4)
+            ctk.CTkLabel(u_row, text=str(u['session_count']), width=80, font=ctk.CTkFont(size=12), text_color=ACCENT_EMERALD).pack(side="left", padx=4)
+
+        btn_close = ctk.CTkButton(box, text="Close", font=ctk.CTkFont(size=13), fg_color="#1e293b", hover_color="#334155", command=modal.destroy, height=36)
+        btn_close.pack(anchor="e", padx=20, pady=(0, 16))
+
     def _create_settings_view(self):
         frame = ctk.CTkFrame(self.pages_container, fg_color="transparent")
         title = ctk.CTkLabel(
             frame,
-            text="Application Settings",
+            text="Application Settings & Database",
             font=ctk.CTkFont(family="Segoe UI", size=26, weight="bold"),
             text_color=TEXT_WHITE,
         )
         title.pack(anchor="w", pady=(0, 20))
 
+        # App Architecture Card
         card = ctk.CTkFrame(frame, fg_color=CARD_BG, corner_radius=16, border_width=1, border_color=CARD_BORDER)
-        card.pack(fill="x", pady=10)
+        card.pack(fill="x", pady=(0, 16))
 
         inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="x", padx=24, pady=24)
+        inner.pack(fill="x", padx=24, pady=20)
 
         lbl = ctk.CTkLabel(
             inner,
-            text="Display Resolution: 1920x1080 (HD)\nDisplay Mode: Dark (Default)\nAudio Engine: CrisperWhisper\nComputer Vision: MediaPipe\nAI Model: Gemini 3.6 Flash",
-            font=ctk.CTkFont(size=14),
+            text="Display Resolution : 1920x1080 (HD)\nDisplay Mode       : Dark (Default)\nAudio Engine       : CrisperWhisper\nComputer Vision    : MediaPipe Multi-Landmark Face Mesh\nAI Model           : Gemini 3.6 Flash",
+            font=ctk.CTkFont(family="Consolas", size=13),
             text_color=TEXT_MUTED,
             justify="left",
         )
         lbl.pack(anchor="w")
 
+        # Database Management Card
+        db_card = ctk.CTkFrame(frame, fg_color=CARD_BG, corner_radius=16, border_width=1, border_color=CARD_BORDER)
+        db_card.pack(fill="x", pady=6)
+
+        db_inner = ctk.CTkFrame(db_card, fg_color="transparent")
+        db_inner.pack(fill="x", padx=24, pady=20)
+
+        db_title = ctk.CTkLabel(db_inner, text="🗄️ MySQL Database Engine", font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color=TEXT_WHITE)
+        db_title.pack(anchor="w", pady=(0, 6))
+
+        stats = get_db_stats() or {"users": 0, "sessions": 0, "takes": 0}
+        db_desc = ctk.CTkLabel(
+            db_inner,
+            text=f"Database: speakwise  •  Status: Connected & Autocommit Active\nTables: users ({stats['users']}), sessions ({stats['sessions']}), takes ({stats['takes']})\nAll registrations, logins, and speech takes are persisted dynamically in real-time.",
+            font=ctk.CTkFont(size=13),
+            text_color=TEXT_MUTED,
+            justify="left",
+        )
+        db_desc.pack(anchor="w", pady=(0, 16))
+
+        btn_db_inspect = ctk.CTkButton(
+            db_inner,
+            text="🔍 View MySQL Tables & Users",
+            font=ctk.CTkFont(family="Segoe UI", size=13, weight="bold"),
+            fg_color=ACCENT_BLUE,
+            hover_color="#2563eb",
+            corner_radius=10,
+            height=40,
+            command=self._open_database_inspector,
+        )
+        btn_db_inspect.pack(anchor="w")
+
         return frame
+
 
 
 if __name__ == "__main__":

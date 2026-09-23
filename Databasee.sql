@@ -4,20 +4,9 @@ CREATE DATABASE speakwise;
 
 USE speakwise;
 
-DROP USER IF EXISTS 'speakwise_user'@'localhost';
-
-CREATE USER 'speakwise_user'@'localhost'
-IDENTIFIED BY 'SpeakWise@123';
-
-GRANT ALL PRIVILEGES
-ON speakwise.*
-TO 'speakwise_user'@'localhost';
-
-FLUSH PRIVILEGES;
-
 
 -- =========================
--- USERS
+-- USERS TABLE
 -- =========================
 
 CREATE TABLE users (
@@ -29,7 +18,7 @@ CREATE TABLE users (
 
 
 -- =========================
--- SESSIONS
+-- SESSIONS TABLE
 -- =========================
 
 CREATE TABLE sessions (
@@ -50,7 +39,7 @@ CREATE TABLE sessions (
 
 
 -- =========================
--- TAKES
+-- TAKES TABLE
 -- =========================
 
 CREATE TABLE takes (
@@ -73,7 +62,7 @@ CREATE TABLE takes (
 
 
 -- =========================
--- CHECK DATA
+-- CHECK TABLES
 -- =========================
 
 SELECT * FROM users;
