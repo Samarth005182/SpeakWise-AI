@@ -1,9 +1,3 @@
-"""SpeakWise AI — Centralized MySQL Database Layer & Real-Time CRUD Operations.
-
-Handles automatic database/table creation and dynamic real-time operations
-for users, sessions, and speech practice takes.
-"""
-
 import json
 import os
 import bcrypt
@@ -14,7 +8,6 @@ load_dotenv()
 
 
 def ensure_database_exists():
-    """Connect to MySQL server and ensure the database exists with utf8mb4 charset."""
     host = os.getenv("DB_HOST", "localhost")
     user = os.getenv("DB_USER", "root")
     password = os.getenv("DB_PASSWORD", "samarth597")
@@ -44,7 +37,6 @@ def ensure_database_exists():
 
 
 def get_connection():
-    """Return a real-time connection to the SpeakWise MySQL database with autocommit enabled."""
     host = os.getenv("DB_HOST", "localhost")
     user = os.getenv("DB_USER", "root")
     password = os.getenv("DB_PASSWORD", "samarth597")
@@ -61,7 +53,6 @@ def get_connection():
         )
         return db
     except mysql.connector.Error as err:
-        # If database doesn't exist, create it and reconnect
         if getattr(err, "errno", None) == 1049:
             ensure_database_exists()
             db = mysql.connector.connect(
@@ -77,7 +68,6 @@ def get_connection():
 
 
 def setup_tables():
-    """Create the required tables (users, sessions, takes) if they do not exist."""
     ensure_database_exists()
     db = get_connection()
     cursor = db.cursor()
@@ -128,7 +118,6 @@ def setup_tables():
 
 
 def seed_admin():
-    """Seed the pre-defined admin account if it does not already exist."""
     admin_name = (os.getenv("ADMIN_NAME") or "Samarth").strip()
     admin_email = (os.getenv("ADMIN_EMAIL") or "admin123@gmail.com").strip()
     admin_password = (os.getenv("ADMIN_PASSWORD") or "admin123").strip()
@@ -168,21 +157,8 @@ def seed_admin():
             db.close()
 
 
-# ============================================================
-# REAL-TIME DYNAMIC USER CRUD OPERATIONS
-# ============================================================
 
 def register_user(name, email, password):
-    """Dynamically register a new user in MySQL in real-time.
-
-    Args:
-        name: Full name of the user
-        email: Email address (unique)
-        password: Raw password (will be hashed with bcrypt)
-
-    Returns:
-        tuple: (success: bool, result_or_error: dict|str)
-    """
     clean_name = (name or "").strip()
     clean_email = (email or "").strip().lower()
     clean_password = (password or "").strip()
@@ -200,7 +176,6 @@ def register_user(name, email, password):
         db = get_connection()
         cursor = db.cursor(dictionary=True)
 
-        # Check for existing email in real-time
         cursor.execute(
             "SELECT user_id FROM users WHERE LOWER(TRIM(email)) = %s",
             (clean_email,),
@@ -238,15 +213,6 @@ def register_user(name, email, password):
 
 
 def authenticate_user(identifier, password):
-    """Dynamically verify credentials against MySQL in real-time.
-
-    Args:
-        identifier: Email address or Name
-        password: Raw password string
-
-    Returns:
-        tuple: (success: bool, user_dict_or_error_msg: dict|str)
-    """
     clean_id = (identifier or "").strip()
     clean_pw = (password or "").strip()
 
@@ -293,11 +259,6 @@ def authenticate_user(identifier, password):
 
 
 def get_all_users():
-    """Retrieve all users from the MySQL database with their session counts in real-time.
-
-    Returns:
-        list of dicts: [{"user_id", "name", "email", "session_count"}]
-    """
     db = None
     cursor = None
     try:
@@ -326,7 +287,6 @@ def get_all_users():
 
 
 def get_user_by_id(user_id):
-    """Retrieve user details by user_id in real-time."""
     db = None
     cursor = None
     try:
@@ -347,7 +307,6 @@ def get_user_by_id(user_id):
 
 
 def delete_user(user_id):
-    """Permanently delete user and all cascade data (sessions, takes) from MySQL in real-time."""
     db = None
     cursor = None
     try:
@@ -365,17 +324,8 @@ def delete_user(user_id):
             db.close()
 
 
-# ============================================================
-# REAL-TIME SESSIONS & TAKES CRUD
-# ============================================================
 
 def save_speech_session(user_id, category, topic_name, speaking_time, audio_path, video_path, transcription, report):
-    """Save a completed speech session and take directly to MySQL in real-time.
-
-    Inserts into:
-      1. `sessions`
-      2. `takes`
-    """
     db = None
     cursor = None
     try:
@@ -428,7 +378,6 @@ def save_speech_session(user_id, category, topic_name, speaking_time, audio_path
 
 
 def get_user_sessions(user_id):
-    """Retrieve all sessions and takes for a user ordered by date descending in real-time."""
     db = None
     cursor = None
     try:
@@ -466,7 +415,6 @@ def get_user_sessions(user_id):
 
 
 def get_db_stats():
-    """Return summary counts of users, sessions, and takes in MySQL in real-time."""
     try:
         db = get_connection()
         cursor = db.cursor(dictionary=True)
@@ -484,7 +432,6 @@ def get_db_stats():
 
 
 def initialize_database():
-    """Set up database, tables, and seed admin — call once at app startup."""
     setup_tables()
     seed_admin()
 

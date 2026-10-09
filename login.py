@@ -1,16 +1,8 @@
-"""SpeakWise AI — Authentication & Session Management Module.
-
-Provides user registration, login, session history, and account deletion
-backed dynamically and in real-time by MySQL database tables (users, sessions, takes)
-with full step-by-step 'Back' navigation at every stage.
-"""
-
-import time
+import json
 
 from speakwise_database import (
     authenticate_user,
     delete_user,
-    get_connection,
     get_user_sessions,
     initialize_database,
     register_user,
@@ -19,7 +11,6 @@ from speakwise_database import (
 
 
 def hash_password(password):
-    """Hash a plaintext password using bcrypt."""
     import bcrypt
 
     return bcrypt.hashpw(
@@ -28,7 +19,6 @@ def hash_password(password):
 
 
 def verify_password(password, password_hash):
-    """Verify a plaintext password against a bcrypt hash."""
     import bcrypt
 
     return bcrypt.checkpw(
@@ -36,20 +26,8 @@ def verify_password(password, password_hash):
     )
 
 
-# ============================================================
-# USER REGISTRATION WITH STEP-BY-STEP BACK SUPPORT
-# ============================================================
 
 def register():
-    """Register a new user account dynamically into MySQL in real-time.
-
-    Prompts for Name, Email, Password, and Confirmation.
-    Type 'b' or 'back' at any step to return to the previous step.
-
-    Returns:
-        dict with user data on success, or None if cancelled/failed.
-    """
-
     print("\n" + "=" * 46)
     print("           CREATE NEW ACCOUNT")
     print("=" * 46)
@@ -113,7 +91,6 @@ def register():
                 print("  [-] Passwords do not match. Try again or type 'b' to go back.\n")
                 continue
 
-            # Real-time dynamic insertion into MySQL
             success, result = register_user(name, email, password)
             if success:
                 print("\n  [+] Account dynamically created and committed in real-time to MySQL!")
@@ -124,17 +101,8 @@ def register():
                 return None
 
 
-# ============================================================
-# USER LOGIN WITH STEP-BY-STEP BACK SUPPORT
-# ============================================================
 
 def login():
-    """Prompt the user to log in with Email (or Name) and password from MySQL in real-time.
-
-    Returns:
-        dict {user_id, name, email} on success, or None on cancel/failure.
-    """
-
     print("\n" + "=" * 46)
     print("                 LOGIN")
     print("=" * 46)
@@ -171,7 +139,6 @@ def login():
 
             password = raw_pw
 
-            # Authenticate dynamically against MySQL
             success, result = authenticate_user(login_input, password)
             if success:
                 print(f"\n  [+] Login successful! Welcome back, {result['name']}!\n")
@@ -181,12 +148,8 @@ def login():
                 step = 1
 
 
-# ============================================================
-# SESSION & TAKE STORAGE
-# ============================================================
 
 def save_session(user_id, category, topic_name, speaking_time, audio_path, video_path, transcription, report):
-    """Save a completed speech session and take to MySQL in real-time."""
     session_id = save_speech_session(
         user_id=user_id,
         category=category,
@@ -203,8 +166,6 @@ def save_session(user_id, category, topic_name, speaking_time, audio_path, video
 
 
 def view_my_sessions(user):
-    """Display the logged-in user's past speech sessions and takes dynamically from MySQL."""
-
     print("\n" + "=" * 60)
     print(f"       SESSION HISTORY FOR {user['name'].upper()} (From MySQL)")
     print("=" * 60)
@@ -214,8 +175,6 @@ def view_my_sessions(user):
         print("\n  No sessions found in MySQL. Start a speech practice to begin!\n")
         input("  Press ENTER to return to menu...")
         return
-
-    import json
 
     for i, row in enumerate(rows, 1):
         date_str = row["created_at"].strftime("%Y-%m-%d %H:%M") if row.get("created_at") else "N/A"
@@ -253,13 +212,8 @@ def view_my_sessions(user):
     input("  Press ENTER to return to menu...")
 
 
-# ============================================================
-# ACCOUNT DELETION WITH STEP-BY-STEP BACK SUPPORT
-# ============================================================
 
 def delete_account(user):
-    """Permanently delete user account dynamically from MySQL in real-time."""
-
     print("\n" + "=" * 50)
     print("           PERMANENT ACCOUNT DELETION")
     print("=" * 50)
@@ -302,12 +256,8 @@ def delete_account(user):
         return False
 
 
-# ============================================================
-# AUTHENTICATION & USER FLOW
-# ============================================================
 
 def authenticate():
-    """Main authentication gate."""
     try:
         initialize_database()
     except Exception as e:
@@ -347,7 +297,6 @@ def authenticate():
 
 
 def user_menu(user):
-    """Post-login menu for the authenticated user."""
     while True:
         print("\n" + "=" * 46)
         print(f"  Welcome, {user['name']}!")

@@ -5,7 +5,6 @@ from google import genai
 
 load_dotenv()
 
-# 16 Diverse Extempore & Speech Practice Categories with Offline Backup Topics
 CATEGORIES = {
     "Technology & Artificial Intelligence": [
         "The Ethical Implications of Autonomous AI Agents",
@@ -130,12 +129,10 @@ FALLBACK_MODELS = [
 
 
 def get_all_categories() -> list[str]:
-    """Return a list of all available topic categories."""
     return list(CATEGORIES.keys())
 
 
 def _generate_topic_with_gemini(category: str) -> str:
-    """Generate a fresh, thought-provoking extempore topic using Gemini AI."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not configured in .env")
@@ -175,22 +172,9 @@ def _generate_topic_with_gemini(category: str) -> str:
 
 
 def get_random_topic(category: str | None = None) -> tuple[str, str]:
-    """Get a random speech topic from a specified or randomly selected category.
-
-    Uses Gemini AI API to generate a fresh topic. If offline or if the API
-    fails, automatically falls back to a curated offline topic bank.
-
-    Args:
-        category: Optional category name from get_all_categories().
-                  If None, a random category is chosen.
-
-    Returns:
-        tuple of (category_name, topic_name)
-    """
     if not category or category not in CATEGORIES:
         category = random.choice(list(CATEGORIES.keys()))
 
-    # Attempt online generation via Gemini
     try:
         topic = _generate_topic_with_gemini(category)
         return category, topic

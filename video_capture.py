@@ -4,7 +4,6 @@ import cv2 as cv
 
 
 def _open_camera():
-    """Directly open camera with DirectShow backend for instant startup on Windows."""
     try:
         cap = cv.VideoCapture(0, cv.CAP_DSHOW)
         if cap is not None and cap.isOpened():
@@ -29,7 +28,6 @@ def _open_camera():
 
 
 def _create_video_writer(output_path, fps, width, height):
-    """Try multiple codecs to create a valid video writer."""
     codecs = ["MJPG", "XVID", "mp4v", "DIVX"]
     for codec in codecs:
         try:
@@ -43,18 +41,17 @@ def _create_video_writer(output_path, fps, width, height):
 
 
 def _generate_fallback_frame(width, height, frame_count, topic_text="SpeakWise AI"):
-    """Generate an animated placeholder frame if no physical webcam is accessible."""
     img = np.zeros((height, width, 3), dtype=np.uint8)
-    img[:] = (18, 12, 9)  # Dark navy
+    img[:] = (22, 21, 25)
 
     center_x, center_y = width // 2, height // 2
     pulse = int(15 * np.sin(frame_count * 0.15))
     radius = max(30, 70 + pulse)
-    cv.circle(img, (center_x, center_y - 20), radius, (246, 130, 59), 2)  # Blue ring
-    cv.circle(img, (center_x, center_y - 20), 40, (70, 30, 20), -1)
+    cv.circle(img, (center_x, center_y - 20), radius, (235, 247, 3), 2)
+    cv.circle(img, (center_x, center_y - 20), 40, (149, 178, 0), -1)
 
-    cv.putText(img, "LIVE AUDIO RECORDING", (center_x - 140, center_y + 80), cv.FONT_HERSHEY_SIMPLEX, 0.7, (248, 250, 252), 2)
-    cv.putText(img, "Camera feed standby / Voice active", (center_x - 130, center_y + 115), cv.FONT_HERSHEY_SIMPLEX, 0.5, (148, 163, 184), 1)
+    cv.putText(img, "LIVE AUDIO RECORDING", (center_x - 140, center_y + 80), cv.FONT_HERSHEY_SIMPLEX, 0.7, (234, 218, 201), 2)
+    cv.putText(img, "Camera feed standby / Voice active", (center_x - 130, center_y + 115), cv.FONT_HERSHEY_SIMPLEX, 0.5, (170, 150, 160), 1)
     return img
 
 
@@ -69,7 +66,6 @@ def record_video(
     show_window=True,
     stop_event=None,
 ):
-    """Prepare the camera, then record against the shared recording deadline."""
     width = 640
     height = 480
     declared_fps = 24.0
@@ -90,7 +86,6 @@ def record_video(
 
     out = _create_video_writer(output_path, actual_fps, width, height)
 
-    # Both devices initialize before releasing the shared start barrier.
     ready_event.set()
     start_event.wait(timeout=5.0)
     print("Camera recording started...")
@@ -100,7 +95,6 @@ def record_video(
 
     try:
         while True:
-            # Check deadline or explicit stop event
             if stop_event and stop_event.is_set():
                 break
             if time.perf_counter() >= timing.get("deadline", float("inf")):

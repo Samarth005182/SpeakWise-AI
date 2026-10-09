@@ -6,9 +6,8 @@ import time
 
 
 MAX_RETRIES = 5
-RETRY_DELAY = 3  # base seconds between retries (exponential backoff)
+RETRY_DELAY = 3
 
-# Models to try in order — if one is overloaded or deprecated, try the next
 FALLBACK_MODELS = [
     "gemini-3.6-flash",
     "gemini-2.5-flash",
@@ -18,7 +17,6 @@ FALLBACK_MODELS = [
 
 
 def _send_with_retry(chat, message):
-    """Send a message with automatic retry on transient errors."""
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             return chat.send_message(message)
@@ -37,7 +35,6 @@ def _send_with_retry(chat, message):
 
 
 def _connect_with_fallback(client, setup_message):
-    """Try each model in FALLBACK_MODELS until one responds successfully."""
     last_error = None
     for model_name in FALLBACK_MODELS:
         print(f"  Trying model: {model_name}...")
@@ -61,7 +58,6 @@ def _connect_with_fallback(client, setup_message):
 
 
 class CoachChatSession:
-    """Manages multi-turn conversation with Gemini AI speech coach."""
 
     def __init__(self, topic, user_name="Speaker", speaking_time_desc="2 minutes"):
         self.topic = topic
@@ -93,7 +89,6 @@ class CoachChatSession:
             self.is_connected = False
 
     def send_message(self, message):
-        """Send message to coach and return response string."""
         if self.is_connected and self.chat:
             try:
                 res = _send_with_retry(self.chat, message)
@@ -102,7 +97,6 @@ class CoachChatSession:
             except Exception as e:
                 print(f"[CoachChatSession] Live send failed: {e}, using smart fallback")
 
-        # Smart contextual fallback response
         msg_lower = message.lower()
         topic = self.topic
 
@@ -150,13 +144,6 @@ class CoachChatSession:
 
 
 def ai_prepare(topic, time_limit=120, speaking_time=60):
-    """Interactive AI chat to help the user prepare for their speech topic.
-
-    Args:
-        topic: The speech topic the user needs to prepare for.
-        time_limit: Seconds allowed for AI-assisted preparation.
-        speaking_time: Target speech delivery duration in seconds.
-    """
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise RuntimeError("GEMINI_API_KEY not set. Add it to your .env file.")
@@ -165,7 +152,6 @@ def ai_prepare(topic, time_limit=120, speaking_time=60):
 
     time_desc = f"{speaking_time // 60} minute(s)" if speaking_time % 60 == 0 else f"{speaking_time} seconds"
 
-    # Send an initial system-like message to set context
     setup_message = (
         f"You are a helpful speech coach. The user has been given the topic: "
         f"\"{topic}\". Help them brainstorm key points, structure their speech, "
@@ -180,7 +166,6 @@ def ai_prepare(topic, time_limit=120, speaking_time=60):
     chat, res = _connect_with_fallback(client, setup_message)
     print(f"\nAI Coach: {res.text}\n")
 
-    # Flag to signal time is up
     time_up = threading.Event()
 
     def _timer():
@@ -213,19 +198,11 @@ def ai_prepare(topic, time_limit=120, speaking_time=60):
             print(f"\n[!] Couldn't get a response: {e}")
             print("Try again or type 'done' to move on.\n")
 
-    # Ensure timer thread finishes
     time_up.set()
     timer_thread.join(timeout=2)
 
 
 def analyze_relevance(topic, transcription):
-    """Analyze how relevant the transcribed speech content is to the topic.
-
-    Sends the transcription text to Gemini AI and returns a dict with
-    a relevance score (1-10) and a list of off-topic sentences.
-
-    Returns None if the analysis cannot be completed.
-    """
     if not transcription or not transcription.strip():
         return None
 
@@ -260,10 +237,8 @@ def analyze_relevance(topic, transcription):
         chat, res = _connect_with_fallback(client, prompt)
         raw = res.text.strip()
 
-        # Strip markdown code fences if the model wraps its reply
         if raw.startswith("```"):
             lines = raw.splitlines()
-            # Remove first and last fence lines
             lines = [
                 ln for ln in lines
                 if not ln.strip().startswith("```")

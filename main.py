@@ -1,25 +1,21 @@
 from audio_text import detect_pauses
-import os
-import random
 import threading
 import time
 
 from dotenv import load_dotenv
-load_dotenv()  # Load .env file (contains GEMINI_API_KEY)
+load_dotenv()
 
 import audio
 import video_capture
 from filler_detection import detect_fillers
 from transcription import transcribe_audio
 from video_analysis import analyze_video
-from report import print_report, calculate_overall
+from report import print_report
 from ai import ai_prepare, analyze_relevance
 from recording_paths import generate_recording_paths
 from login import authenticate, user_menu, save_session
 from topics import get_random_topic, get_all_categories
 
-
-DEFAULT_RECORDING_SECONDS = 60
 
 def countdown(total_seconds):
     for remaining in range(total_seconds, 0, -1):
@@ -31,7 +27,6 @@ def countdown(total_seconds):
 
 
 def recording_countdown(timing):
-    """Display a countdown that stays synchronized with the recording deadline."""
     deadline = timing["deadline"]
     while True:
         remaining = deadline - time.perf_counter()
@@ -45,7 +40,6 @@ def recording_countdown(timing):
 
 
 def select_category():
-    """Prompt the user to choose a category or surprise random selection."""
     categories = get_all_categories()
     print("\n" + "=" * 60)
     print("               CHOOSE SPEECH CATEGORY")
@@ -77,7 +71,6 @@ def select_category():
 
 
 def select_speaking_duration():
-    """Prompt the user to choose the speech recording duration in seconds."""
     print("\n" + "=" * 60)
     print("               CHOOSE SPEAKING DURATION")
     print("=" * 60)
@@ -122,20 +115,11 @@ def select_speaking_duration():
 
 
 def run_speech_session():
-    """Run a single speech practice session.
-
-    Returns:
-        tuple of (category, topic, speaking_seconds, audio_path, video_path, text, scores)
-        or None on failure/cancel.
-    """
-
-    # --- Step 1: Category Selection ---
     selected_category = select_category()
     if selected_category == "CANCELLED":
         print("\n  Practice cancelled. Returning to menu...\n")
         return None
 
-    # --- Step 2: Speaking Duration Selection ---
     speaking_seconds = select_speaking_duration()
     if speaking_seconds is None:
         print("\n  Practice cancelled. Returning to menu...\n")
@@ -182,15 +166,12 @@ def run_speech_session():
     print(f"You have {speaking_seconds} seconds.\n")
     print("For the first 3 seconds, look naturally at the camera for visual calibration.")
 
-    # The two workers prepare their devices independently, then wait behind the
-    # same barrier. This removes the previous six-second audio-only lead-in.
     start_event = threading.Event()
     audio_ready = threading.Event()
     video_ready = threading.Event()
     recording_status = {}
     timing = {}
 
-    # Generate unique file paths for this session
     audio_path, video_path = generate_recording_paths()
     print(f"Audio will be saved to: {audio_path}")
     print(f"Video will be saved to: {video_path}")
@@ -215,7 +196,6 @@ def run_speech_session():
     audio_thread.start()
     video_thread.start()
 
-    # Do not start a partial recording if either capture device cannot initialize.
     audio_ready.wait()
     video_ready.wait()
     if recording_status:
@@ -224,7 +204,6 @@ def run_speech_session():
             print(f"- {device}: {error}")
         return None
 
-    # `perf_counter` provides a monotonic, common deadline for video and timer.
     timing["start_time"] = time.perf_counter()
     timing["deadline"] = timing["start_time"] + speaking_seconds
     print("\nRecording started: microphone and camera are synchronized.")
@@ -237,7 +216,6 @@ def run_speech_session():
     audio_thread.join()
     timer_thread.join()
 
-    # Sync diagnostics
     actual_fps = timing.get("video_actual_fps", 20.0)
     video_frames = timing.get("video_frames", 0)
     actual_video_duration = video_frames / actual_fps if actual_fps > 0 else 0
@@ -292,7 +270,6 @@ def run_speech_session():
 if __name__ == "__main__":
     import sys
 
-    # Default to GUI mode unless --cli flag is passed
     if "--cli" not in sys.argv:
         try:
             from gui import SpeakWiseApp
@@ -303,12 +280,10 @@ if __name__ == "__main__":
             print(f"[!] GUI launch notice: {e}. Falling back to CLI mode.\n")
 
     while True:
-        # --- Authentication Gate ---
         user = authenticate()
         if user is None:
             break
 
-        # --- Post-login loop ---
         while True:
             action = user_menu(user)
 

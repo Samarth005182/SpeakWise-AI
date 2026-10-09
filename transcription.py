@@ -1,20 +1,19 @@
 import os
-import time
+import re
 import warnings
 
 import torch
+from crisperwhisper import CrisperWhisperModel
+from audio_text import is_audio_silent
 
 warnings.filterwarnings(
     "ignore",
     message=r".*torch_dtype.*deprecated.*"
 )
-# Hide Hugging Face / Transformers warnings
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 warnings.filterwarnings("ignore")
-
-from crisperwhisper import CrisperWhisperModel
 
 
 MODEL_PATH = r".\models\CrisperWhisper2.0_small"
@@ -24,7 +23,6 @@ model_device = None
 
 
 def preferred_device():
-    """Use the NVIDIA GPU when PyTorch can access it."""
     if torch.cuda.is_available():
         return "cuda", "float16"
 
@@ -39,8 +37,6 @@ def load_model():
 
         device, compute_type = preferred_device()
 
-        load_started = time.perf_counter()
-
         try:
             model = CrisperWhisperModel(
                 MODEL_PATH,
@@ -54,8 +50,6 @@ def load_model():
             if device != "cuda":
                 raise
 
-            # A missing/unsupported CUDA runtime should not prevent the app
-            # from working, although CPU inference is much slower.
             print(f"GPU model loading failed ({error}). Falling back to CPU.")
             model = CrisperWhisperModel(
                 MODEL_PATH,
@@ -68,18 +62,12 @@ def load_model():
     return model
 
 
-import re
-from audio_text import is_audio_silent
-
-
 def _clean_transcription(text):
-    """Filter out common Whisper silence hallucinations and repetitive noise loops."""
     if not text:
         return ""
 
     text = text.strip()
 
-    # Known Whisper hallucination phrases on silence or ambient noise
     hallucinations = [
         r"^\[BLANK_AUDIO\]$",
         r"^\[silence\]$",
@@ -96,7 +84,6 @@ def _clean_transcription(text):
         if re.match(pattern, text, re.IGNORECASE):
             return ""
 
-    # Check for excessive word repetition (e.g. "word word word word word")
     words = text.split()
     if len(words) >= 5:
         unique_words = set(w.lower().strip(".,!?;:\"'") for w in words)
@@ -107,15 +94,10 @@ def _clean_transcription(text):
 
 
 def transcribe_audio(audio_file):
-    """
-    Transcribe speech from an audio file.
-    If the audio contains silence/background noise only, returns "" immediately.
-    """
     if not os.path.exists(audio_file):
         print("ERROR: Audio file not found!")
         return ""
 
-    # Pre-check: if the audio has no speech energy, do not pass to Whisper
     try:
         if is_audio_silent(audio_file):
             print("[Audio] Silence detected (no vocal activity). Skipping Whisper inference.")

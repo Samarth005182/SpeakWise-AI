@@ -5,9 +5,6 @@ CREATE DATABASE speakwise;
 USE speakwise;
 
 
--- =========================
--- USERS TABLE
--- =========================
 
 CREATE TABLE users (
     user_id INT PRIMARY KEY AUTO_INCREMENT,
@@ -17,9 +14,6 @@ CREATE TABLE users (
 );
 
 
--- =========================
--- SESSIONS TABLE
--- =========================
 
 CREATE TABLE sessions (
     session_id INT PRIMARY KEY AUTO_INCREMENT,
@@ -38,9 +32,6 @@ CREATE TABLE sessions (
 );
 
 
--- =========================
--- TAKES TABLE
--- =========================
 
 CREATE TABLE takes (
     take_id INT PRIMARY KEY AUTO_INCREMENT,
@@ -61,9 +52,6 @@ CREATE TABLE takes (
 );
 
 
--- =========================
--- CHECK TABLES
--- =========================
 
 SELECT * FROM users;
 

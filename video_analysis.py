@@ -5,11 +5,9 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["GLOG_minloglevel"] = "3"
 
 import cv2
-import time
 import numpy as np
 
 from dataclasses import dataclass
-from collections import Counter
 from statistics import median
 
 import mediapipe as mp
@@ -29,9 +27,6 @@ from face_geometry import (
 )
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
 
 VIDEO_FILE = "myrecording.avi"
 MODEL_FILE = "models/face_landmarker.task"
@@ -57,9 +52,6 @@ RIGHT_IRIS = 473
 JAW_LANDMARKS = [61, 291, 199]
 
 
-# ============================================================
-# MEDIA PIPE SETUP
-# ============================================================
 
 BaseOptions = mp.tasks.BaseOptions
 FaceLandmarker = mp.tasks.vision.FaceLandmarker
@@ -67,9 +59,6 @@ FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
 VisionRunningMode = mp.tasks.vision.RunningMode
 
 
-# ============================================================
-# DATA STRUCTURES
-# ============================================================
 
 @dataclass
 class FrameResult:
@@ -89,14 +78,8 @@ class FrameResult:
     state: str = "face_missing"
 
 
-# ============================================================
-# ANGLE HELPERS
-# ============================================================
 
 def normalize_angle(angle):
-    """
-    Normalize angle to [-180, 180].
-    """
     while angle > 180:
         angle -= 360
 
@@ -107,9 +90,6 @@ def normalize_angle(angle):
 
 
 def angle_difference(angle, baseline):
-    """
-    Smallest signed difference between two angles.
-    """
     difference = angle - baseline
 
     while difference > 180:
@@ -121,15 +101,10 @@ def angle_difference(angle, baseline):
     return difference
 
 
-# ============================================================
-# EYE GAZE & BLINK
-# ============================================================
 
 def calculate_ear(landmarks, eye_points):
-    """Calculate Eye Aspect Ratio (EAR) for blink detection."""
     try:
         pts = landmarks[eye_points]
-        # eye_points: [p1(outer), p4(inner), p2(top1), p6(bottom1), p3(top2), p5(bottom2)]
         p1 = pts[0, :2]
         p4 = pts[1, :2]
         p2 = pts[2, :2]
@@ -149,18 +124,6 @@ def calculate_ear(landmarks, eye_points):
 
 
 def get_eye_gaze(landmarks, eye_points, iris_point):
-    """
-    Return normalized iris coordinates inside an eye.
-
-    X:
-        0 = left side of eye
-        1 = right side of eye
-
-    Y:
-        0 = top
-        1 = bottom
-    """
-
     eye = landmarks[eye_points]
     iris = landmarks[iris_point]
 
@@ -180,19 +143,8 @@ def get_eye_gaze(landmarks, eye_points, iris_point):
 
 
 
-# ============================================================
-# HEAD POSE
-# ============================================================
 
 def get_head_pose(landmarks, frame_size):
-    """
-    Estimate head yaw, pitch and roll using MediaPipe's
-    metric face geometry and solvePnP.
-
-    This is the original implementation used by the
-    working SpeakWise version.
-    """
-
     width, height = frame_size
 
     focal = width
@@ -310,9 +262,6 @@ def get_head_pose(landmarks, frame_size):
     return yaw, pitch, roll
 
 
-# ============================================================
-# MEDIAN HELPER
-# ============================================================
 
 def safe_median(values, default=0.0):
 
@@ -329,16 +278,8 @@ def safe_median(values, default=0.0):
     return float(median(valid))
 
 
-# ============================================================
-# CALIBRATION
-# ============================================================
 
 def calibrate(frames):
-    """
-    Calculate neutral eye and head position from the
-    beginning of the video.
-    """
-
     calibration_frames = [
         frame
         for frame in frames
@@ -363,9 +304,6 @@ def calibrate(frames):
         and frame.roll is not None
     ]
 
-    # --------------------------------------------------------
-    # Iris calibration
-    # --------------------------------------------------------
 
     if valid_iris:
 
@@ -396,9 +334,6 @@ def calibrate(frames):
         right_x = 0.5
         right_y = 0.5
 
-    # --------------------------------------------------------
-    # Head pose calibration
-    # --------------------------------------------------------
 
     if valid_pose:
 
@@ -436,24 +371,14 @@ def calibrate(frames):
     }
 
 
-# ============================================================
-# CLASSIFICATION
-# ============================================================
 
 def classify_face(
     frame,
     calibration,
 ):
-    """
-    Determine the user's visual state.
-    """
-
     if not frame.face_detected:
         return "face_missing"
 
-    # --------------------------------------------------------
-    # Head differences
-    # --------------------------------------------------------
 
     yaw_difference = 0.0
     pitch_difference = 0.0
@@ -477,20 +402,13 @@ def classify_face(
             calibration["roll"],
         )
 
-    # --------------------------------------------------------
-    # Head turned
-    # --------------------------------------------------------
 
     if abs(yaw_difference) > YAW_TOLERANCE:
         return "head_turned"
 
-    # If the user is simply blinking while facing the camera, retain contact
     if getattr(frame, "is_blinking", False):
         return "camera_contact"
 
-    # --------------------------------------------------------
-    # Iris differences
-    # --------------------------------------------------------
 
     left_dx = 0.0
     left_dy = 0.0
@@ -513,9 +431,6 @@ def classify_face(
     avg_dx = (left_dx + right_dx) / 2.0
     avg_dy = (left_dy + right_dy) / 2.0
 
-    # --------------------------------------------------------
-    # Looking up/down
-    # --------------------------------------------------------
 
     if avg_dy < -GAZE_Y_TOLERANCE:
         return "looking_up"
@@ -523,9 +438,6 @@ def classify_face(
     if avg_dy > GAZE_Y_TOLERANCE:
         return "looking_down"
 
-    # --------------------------------------------------------
-    # Looking left/right
-    # --------------------------------------------------------
 
     if avg_dx < -GAZE_X_TOLERANCE:
         return "looking_left"
@@ -533,23 +445,13 @@ def classify_face(
     if avg_dx > GAZE_X_TOLERANCE:
         return "looking_right"
 
-    # --------------------------------------------------------
-    # Camera contact
-    # --------------------------------------------------------
 
     return "camera_contact"
 
 
 
-# ============================================================
-# SMOOTH STATES
-# ============================================================
 
 def smooth_states(frames):
-    """
-    Remove very short state changes caused by landmark noise.
-    """
-
     if not frames:
         return frames
 
@@ -625,9 +527,6 @@ def smooth_states(frames):
     return frames
 
 
-# ============================================================
-# LOAD VIDEO
-# ============================================================
 
 def get_video_information(video_file):
 
@@ -662,9 +561,6 @@ def get_video_information(video_file):
     return fps, frame_count, width, height, duration
 
 
-# ============================================================
-# CREATE FACE LANDMARKER
-# ============================================================
 
 def create_face_landmarker():
 
@@ -690,9 +586,6 @@ def create_face_landmarker():
     return FaceLandmarker.create_from_options(options)
 
 
-# ============================================================
-# PROCESS VIDEO
-# ============================================================
 
 def process_video(
     video_file,
@@ -700,13 +593,6 @@ def process_video(
     width,
     height,
 ):
-    """
-    Process every video frame and collect:
-    - face landmarks
-    - iris position
-    - head pose
-    """
-
     frames = []
 
     landmarker = create_face_landmarker()
@@ -742,9 +628,6 @@ def process_video(
                 timestamp=timestamp
             )
 
-            # ------------------------------------------------
-            # Convert OpenCV BGR → RGB
-            # ------------------------------------------------
 
             rgb_frame = cv2.cvtColor(
                 frame,
@@ -767,9 +650,6 @@ def process_video(
 
                 result = None
 
-            # ------------------------------------------------
-            # Face
-            # ------------------------------------------------
 
             if (
                 result is not None
@@ -791,9 +671,6 @@ def process_video(
 
                 frame_result.face_detected = True
 
-                # --------------------------------------------
-                # Iris & Blink
-                # --------------------------------------------
 
                 (
                     frame_result.left_x,
@@ -818,9 +695,6 @@ def process_video(
                 avg_ear = (left_ear + right_ear) / 2.0
                 frame_result.is_blinking = (avg_ear < 0.17)
 
-                # --------------------------------------------
-                # Head pose
-                # --------------------------------------------
 
                 (
                     frame_result.yaw,
@@ -844,9 +718,6 @@ def process_video(
     return frames
 
 
-# ============================================================
-# CALCULATE STATE DURATIONS
-# ============================================================
 
 def calculate_state_durations(frames):
 
@@ -882,9 +753,6 @@ def calculate_state_durations(frames):
     return durations
 
 
-# ============================================================
-# HEAD FORWARD ANALYSIS
-# ============================================================
 
 def calculate_head_position(frames, calibration):
 
@@ -968,7 +836,6 @@ def calculate_head_position(frames, calibration):
 
             current_steady = 0.0
 
-    # If pose was detectable for less than 1.5 seconds, do not award high percentage
     if total_pose_time < 1.5:
         percentage = 0.0
     else:
@@ -987,9 +854,6 @@ def calculate_head_position(frames, calibration):
     }
 
 
-# ============================================================
-# EYE CONTACT ANALYSIS
-# ============================================================
 
 def calculate_eye_contact(frames):
 
@@ -1071,7 +935,6 @@ def calculate_eye_contact(frames):
         * 100.0
     )
 
-    # Guard against giving 100% eye contact when face was only visible for 1 frame
     if trackable_time < 1.5 or confidence < 15.0:
         contact_percentage = 0.0
         has_face = False
@@ -1098,9 +961,6 @@ def calculate_eye_contact(frames):
 
 
 
-# ============================================================
-# PRINT CALIBRATION
-# ============================================================
 
 def print_calibration(calibration):
 
@@ -1136,9 +996,6 @@ def print_calibration(calibration):
     )
 
 
-# ============================================================
-# HEAD POSE DIAGNOSTICS
-# ============================================================
 
 def print_head_diagnostics(frames, calibration):
 
@@ -1227,9 +1084,6 @@ def print_head_diagnostics(frames, calibration):
         )
 
 
-# ============================================================
-# STATE BREAKDOWN
-# ============================================================
 
 def print_state_breakdown(
     durations,
@@ -1285,9 +1139,6 @@ def print_state_breakdown(
     )
 
 
-# ============================================================
-# VIDEO PRESENCE REPORT
-# ============================================================
 
 def print_video_presence_report(
     total_duration,
@@ -1334,9 +1185,6 @@ def print_video_presence_report(
         )
     )
 
-    # --------------------------------------------------------
-    # Eye contact
-    # --------------------------------------------------------
 
     print()
     print("--- Camera Eye Contact ---")
@@ -1393,9 +1241,6 @@ def print_video_presence_report(
         f"Assessment:        {assessment}"
     )
 
-    # --------------------------------------------------------
-    # Head position
-    # --------------------------------------------------------
 
     print()
     print("--- Head Position ---")
@@ -1423,9 +1268,6 @@ def print_video_presence_report(
 
         print("Assessment:        needs improvement")
 
-    # --------------------------------------------------------
-    # Coaching
-    # --------------------------------------------------------
 
     print()
     print("--- Coaching Focus ---")
@@ -1459,9 +1301,6 @@ def print_video_presence_report(
         )
 
 
-# ============================================================
-# DEBUG SAMPLE
-# ============================================================
 
 def print_sample_data(frames):
 
@@ -1552,9 +1391,6 @@ def print_sample_data(frames):
         )
 
 
-# ============================================================
-# MAIN ANALYSIS FUNCTION
-# ============================================================
 
 def analyze_video(video_file=None):
 
@@ -1569,9 +1405,6 @@ def analyze_video(video_file=None):
 
         return None
 
-    # --------------------------------------------------------
-    # Video information
-    # --------------------------------------------------------
 
     (
         fps,
@@ -1583,9 +1416,6 @@ def analyze_video(video_file=None):
         video_file
     )
 
-    # --------------------------------------------------------
-    # Process frames
-    # --------------------------------------------------------
 
     frames = process_video(
         video_file,
@@ -1598,15 +1428,9 @@ def analyze_video(video_file=None):
 
         return None
 
-    # --------------------------------------------------------
-    # Calibration
-    # --------------------------------------------------------
 
     calibration = calibrate(frames)
 
-    # --------------------------------------------------------
-    # Classify frames
-    # --------------------------------------------------------
 
     for frame in frames:
 
@@ -1615,40 +1439,25 @@ def analyze_video(video_file=None):
             calibration,
         )
 
-    # --------------------------------------------------------
-    # Smooth state changes
-    # --------------------------------------------------------
 
     frames = smooth_states(frames)
 
-    # --------------------------------------------------------
-    # State durations
-    # --------------------------------------------------------
 
     durations = calculate_state_durations(
         frames
     )
 
-    # --------------------------------------------------------
-    # Eye contact
-    # --------------------------------------------------------
 
     eye_report = calculate_eye_contact(
         frames
     )
 
-    # --------------------------------------------------------
-    # Head position
-    # --------------------------------------------------------
 
     head_report = calculate_head_position(
         frames,
         calibration,
     )
 
-    # --------------------------------------------------------
-    # Return report
-    # --------------------------------------------------------
 
     return {
         "duration": duration,
@@ -1665,9 +1474,6 @@ def analyze_video(video_file=None):
     }
 
 
-# ============================================================
-# DIRECT EXECUTION
-# ============================================================
 
 if __name__ == "__main__":
 

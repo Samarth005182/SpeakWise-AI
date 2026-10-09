@@ -1,18 +1,3 @@
-# Many parts taken from the cpp implementation from github.com/google/mediapipe
-#
-# Copyright 2020 The MediaPipe Authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 import numpy as np
 
@@ -2406,88 +2391,23 @@ for idx, weight in procrustes_landmark_basis:
 
 
 class Singleton(type):
-    """
-    This implements the Singleton design pattern using a metaclass. The Singleton class ensures that only one
-    instance of the class is created and returned whenever the class is called. The metaclass defines the __call__
-    method which creates and returns an instance of the Singleton class if it does not already exist. The _instances
-    dictionary is used to keep track of existing instances of the class. Overall, this implementation ensures that
-    the Singleton class can only be instantiated once and that subsequent calls to the class return the same instance.
-
-    """
-
     _instances = {}
 
     def __call__(cls, *args, **kwargs):
-        """
-        The  `__call__`  method is a special method in Python that allows an object to be called like a function. In
-        this case, it is used to create and return an instance of the Singleton class. It checks if the class is not
-        already in the _instances. If it isn't, it creates a new instance of the class and adds it to the _instances.
-        Overall, this implementation ensures that only one instance of the Singleton class is created and returned
-        whenever the class is called.
-
-        Parameters
-        ----------
-        args: Variable length argument list.
-        kwargs: Arbitrary keyword arguments.
-
-        Returns
-        -------
-        The instance of the class as a Singleton object.
-
-        """
         if cls not in cls._instances:
             cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
         return cls._instances[cls]
 
 
 class Debugger(metaclass=Singleton):
-    """
-    The Debugger class is a singleton class that allows an object to run in debug mode.
-
-    Methods
-    -------
-    set_debug: Used to set the debug mode.
-    toggle: Toggles the value of the "debug" attribute.
-    get_debug: Used to get the value of the "debug" attribute.
-
-    """
 
     def set_debug(self, debug):
-        """
-        This method is used to set the debug mode for an object. The "debug" parameter is a boolean value that
-        determines whether the object should run in debug mode. By setting the "debug" attribute of the object
-        to the value of the "debug" parameter, the debug mode can be turned on or off.
-
-        Parameters:
-        -----------
-        debug: Debug value as a bool.
-
-        Returns
-        -------
-
-        """
         self.debug = debug
 
     def toggle(self):
-        """
-        This method toggles the value of the "debug" attribute of an object. If "debug" is currently True,
-        it will be set to False, and vice versa. The purpose of this function is to easily switch between debug mode
-        and normal mode for the object.
-
-        Returns
-        -------
-
-        """
         self.debug = not self.debug
 
     def get_debug(self):
-        """
-        This method is used to get the value of the "debug" attribute.
-
-        Returns
-        -------
-
-        """
         return self.debug
 
 
@@ -2504,24 +2424,6 @@ class PCF:
         frame_width=1080,
         fy=1074.520446598223,
     ):
-        """
-        This method sets the values of several attributes including the near and far clipping planes, frame height
-        and width, and the focal length in the y-direction (fy) for a Perspective Camera Frustum (PCF) object. Then
-        calculates the vertical field of view (fov_y) using the frame height and fy. It then calculates the height
-        and width at the near clipping plane based on the fov_y and frame dimensions. Finally, the method sets the
-        values for the left, right, bottom, and top attributes, which define the boundaries of the viewing frustum.
-        These values are derived from the width and height at the near clipping plane. In other words, this method
-        will define a rectangular region in the 3D space.
-
-        Parameters:
-        -----------
-        near: Near clipping plane value as an int.
-        far: Far clipping plane value as an int.
-        frame_height: Height of frame as an int or a float.
-        frame_width: Height of frame as an int or a float.
-        fy: Focal length in the y-direction as a float.
-
-        """
         self.near = near
         self.far = far
         self.frame_height = frame_height
@@ -2530,10 +2432,8 @@ class PCF:
 
         fov_y = 2 * np.arctan(frame_height / (2 * fy))
 
-        # kDegreesToRadians = np.pi / 180.0 # never used
         height_at_near = 2 * near * np.tan(0.5 * fov_y)
         width_at_near = frame_width * height_at_near / frame_height
-        # print(height_at_near)
 
         self.fov_y = fov_y
         self.left = -0.5 * width_at_near
@@ -2543,44 +2443,13 @@ class PCF:
 
 
 def log(name, f):
-    """
-    This function is used to log information. If debugging is enabled, the function prints the log message. The
-    purpose of this function is to provide a convenient way to log information during debugging. It allows developers
-    to easily track the flow of their code and inspect the values of variables at different points.
-
-    Parameters:
-    -----------
-    name: Represents the name of the log as a str.
-    f: Represents the content of the log as an object.
-
-    Returns
-    -------
-
-    """
     if DEBUG.get_debug():
         print(f"{name} logged:", f)
         print()
 
 
 def cpp_compare(name, np_matrix):
-    """
-    This function is used to compare a given matrix with a C++ matrix stored in a file. If using debug mode,
-    the function proceeds to compare the matrices. To ensure correct memory alignment, the C++ matrix is loaded from
-    the file and reshaped into a 2D array. Then, the function calculates the sum of squared differences between the
-    C++ matrix and the first rows and cols of the np_matrix. Finally, the function prints the result of the
-    comparison.
-
-    Parameters:
-    -----------
-    name: Name of the file as a str.
-    f: Represents the content of the log as an object.
-
-    Returns
-    -------
-
-    """
     if DEBUG.get_debug():
-        # reorder cpp matrix as memory alignment is not correct
         cpp_matrix = np.load(f"{name}_cpp.npy")
         rows, cols = cpp_matrix.shape
         cpp_matrix = np.split(np.reshape(cpp_matrix, -1), cols)
@@ -2591,41 +2460,6 @@ def cpp_compare(name, np_matrix):
 
 
 def get_metric_landmarks(screen_landmarks, pcf):
-    """
-    This function performs several steps to convert the screen landmarks into metric landmarks.
-
-    First, the screen landmarks are projected onto the 3D space using the Perspective Camera Frustum (PCF). The depth
-    offset is calculated as the mean of the z-coordinates of the projected landmarks.
-
-    Next, a copy of the projected landmarks is made and the handedness is changed to match the coordinate system used
-    in the subsequent steps. The scale of the first iteration is estimated using these intermediate landmarks.
-
-    Another copy of the projected landmarks is made and the z-coordinates are moved and rescaled based on the pcf,
-    the depth offset, the first iteration scale, and the intermediate landmarks. The intermediate landmarks are then
-    unprojected back to the screen space using the pcf. The handedness is changed again to match the coordinate system.
-
-    The scale of the second iteration is estimated using these intermediate landmarks. The metric landmarks are then
-    calculated by z-coordinates moving and rescaling the projected landmarks based on the pcf, the depth offset and
-    the total scale (product of first and second iteration scales). The metric landmarks are unprojected back to the
-    screen space and the handedness is changed again.
-
-    A weighted orthogonal problem is solved using the canonical metric landmarks, the metric landmarks, and landmark
-    weights. The resulting pose transformation matrix is stored and compared using a C++ function.
-
-    The inverse of the pose transformation matrix is calculated to obtain the inverse rotation and translation
-    components. The metric landmarks are transformed using the inverse rotation and translation.
-
-    Parameters:
-    -----------
-    screen_landmarks: Transposed face landmarks as a np.ndarray.
-    pcf: A Perspective Camera Frustum (PCF) object.
-
-    Returns
-    -------
-    metric_landmarks: Metric landmarks as a np.ndarray.
-    pose_transform_mat: Pose transformation matrix as a np.ndarray.
-
-    """
     screen_landmarks = project_xy(screen_landmarks, pcf)
     depth_offset = np.mean(screen_landmarks[2, :])
 
@@ -2666,33 +2500,6 @@ def get_metric_landmarks(screen_landmarks, pcf):
 
 
 def project_xy(landmarks, pcf):
-    """
-    This function first calculates the scaling factors and translation values for the x and y axes based on the difference between the pcf
-    parameters.
-
-    Next, the function modifies the landmarks by performing the following operations:
-    1. It subtracts the y-coordinate values from 1.0. This is done to flip the y-axis so that the coordinates are
-    aligned with the conventional Cartesian coordinate system.
-
-    2. It multiplies the coordinates by a scaling factor array, which is created by stacking the x and y scaling
-    factors with an additional x scaling factor. This scales the coordinates to fit within the specified region.
-
-    3. It adds a translation array, which is created by stacking the x and y translation values with a 0 value. This
-    translates the coordinates to align them with the specified region.
-
-    Overall, this function takes a set of 3D coordinates and projects them onto a 2D plane defined by a specified
-    region. The resulting coordinates are scaled and translated to fit within the region.
-
-    Parameters:
-    -----------
-    landmarks: Transposed face landmarks in a 3D space as a np.ndarray.
-    pcf: A Perspective Camera Frustum (PCF) object.
-
-    Returns
-    -------
-    landmarks: Modified landmarks as a np.ndarray.
-
-    """
     x_scale = pcf.right - pcf.left
     y_scale = pcf.top - pcf.bottom
     x_translation = pcf.left
@@ -2707,67 +2514,18 @@ def project_xy(landmarks, pcf):
 
 
 def change_handedness(landmarks):
-    """
-    This function is first multiplies the second row of the "landmarks" array by -1.0, effectively changing the sign
-    of all the elements in that row. Finally, it returns the modified landmarks. By multiplying the second row by
-    -1.0, it is flipping the landmarks from left-handed coordinates to right-handed coordinates or vice versa.
-
-    Parameters:
-    -----------
-    landmarks: Landmarks as a np.ndarray.
-
-    Returns
-    -------
-    landmarks: Modified landmarks as a np.ndarray.
-
-    """
     landmarks[2, :] *= -1.0
 
     return landmarks
 
 
 def move_and_rescale_z(pcf, depth_offset, scale, landmarks):
-    """
-    This function is used to move and rescale the z-coordinate of a set of landmarks.
-
-    The function first subtracts the depth_offset from the z-coordinate of each landmark. Then, it adds the near clipping plane value from the pcf object to each z-coordinate. Finally, it divides each z-coordinate by the scaling factor.
-
-
-    Parameters:
-    -----------
-    pcf: A Perspective Camera Frustum (PCF) object.
-    depth_offset: A value representing the offset of the depth values of the landmarks as a float.
-    scale: A value representing the scaling factor for the z-coordinate of the landmarks  as a float.
-    landmarks: Landmarks in a 3D space as a np.ndarray.
-
-    Returns
-    -------
-    landmarks: Modified landmarks as a np.ndarray.
-
-    """
     landmarks[2, :] = (landmarks[2, :] - depth_offset + pcf.near) / scale
 
     return landmarks
 
 
 def unproject_xy(pcf, landmarks):
-    """
-    This function unprojects the x and y coordinates of the landmarks based on the given Perspective Camera Frustum (
-    PCF). To achieve this, the x and y coordinates of the landmarks are multiplied by their corresponding z
-    coordinates divided by the near clipping plane distance (pcf.near). This calculation is done element-wise for all
-    landmarks. Overall, this function helps in transforming the 2D image coordinates of the landmarks to their
-    original 3D coordinates in the camera's coordinate system.
-
-    Parameters:
-    -----------
-    pcf: A Perspective Camera Frustum (PCF) object.
-    landmarks: Landmarks in a 3D space as a np.ndarray.
-
-    Returns
-    -------
-    landmarks: Modified landmarks as a np.ndarray.
-
-    """
     landmarks[0, :] = landmarks[0, :] * landmarks[2, :] / pcf.near
     landmarks[1, :] = landmarks[1, :] * landmarks[2, :] / pcf.near
 
@@ -2775,19 +2533,6 @@ def unproject_xy(pcf, landmarks):
 
 
 def estimate_scale(landmarks):
-    """
-    This function calculates the transformation matrix by solving a weighted orthogonal problem. Finally,
-    the function returns the Euclidean norm of the first column of the transformation matrix.
-
-    Parameters:
-    -----------
-    landmarks: Landmarks in a 3D space as a np.ndarray.
-
-    Returns
-    -------
-    landmarks: Modified landmarks as a np.ndarray.
-
-    """
     transform_mat = solve_weighted_orthogonal_problem(
         canonical_metric_landmarks, landmarks, landmark_weights
     )
@@ -2796,36 +2541,10 @@ def estimate_scale(landmarks):
 
 
 def extract_square_root(point_weights):
-    """
-    This function calculates the square root of the point weights and returns the result.
-
-    Parameters:
-    -----------
-    point_weights: Point weights as a np.ndarray.
-
-    Returns
-    -------
-    landmarks: Square root of point weights as a np.ndarray.
-
-    """
     return np.sqrt(point_weights)
 
 
 def solve_weighted_orthogonal_problem(source_points, target_points, point_weights):
-    """
-    This function is used to solve a weighted orthogonal problem.
-
-    Parameters:
-    -----------
-    source_points: Source points as a np.ndarray.
-    target_points: Target points as a np.ndarray.
-    point_weights: Point weights as a np.ndarray.
-
-    Returns
-    -------
-    transform_mat: Transformation matrix as a np.ndarray.
-
-    """
     sqrt_weights = extract_square_root(point_weights)
     transform_mat = internal_solve_weighted_orthogonal_problem(
         source_points, target_points, sqrt_weights
@@ -2834,66 +2553,22 @@ def solve_weighted_orthogonal_problem(source_points, target_points, point_weight
 
 
 def internal_solve_weighted_orthogonal_problem(sources, targets, sqrt_weights):
-    """
-    This function solves a weighted orthogonal problem.
-
-    The function calculates the weighted sources and weighted targets matrices. The weighted sources matrix is
-    obtained by element-wise multiplication of the "sources" matrix with the square root of weights. The weighted
-    targets matrix is obtained by multiplying the first 468 columns of the "targets" matrix with the square root of
-    weights. Next, the function calculates the total weight by summing the product of the square root of weights with
-    itself.
-
-    The function then calculates the source center of mass by summing the element-wise product of the weighted
-    sources matrix with the square root of weights and dividing by the total weight.
-
-    Next, the function calculates the centered weighted sources matrix by subtracting the product of the source
-    center of mass and the square root of weights from the weighted sources matrix.
-
-    The function then calculates the design matrix by multiplying the weighted targets matrix with the transposed
-    centered weighted sources matrix.
-
-    The function then computes optimal rotation and optimal scale to calculate the optimal rotation and scale
-    parameters, respectively. The rotation and scale parameters are then combined into a transformation matrix.
-
-    Parameters:
-    -----------
-    sources: Source points as a np.ndarray.
-    targets: Target points as a np.ndarray.
-    sqrt_weights: Square root of weights as a np.ndarray.
-
-    Returns
-    -------
-    result: Transformation matrix as a np.ndarray.
-
-    """
     cpp_compare("sources", sources)
     cpp_compare("targets", targets)
 
-    # tranposed(A_w).
     weighted_sources = sources * sqrt_weights[None, :]
-    # tranposed(B_w).
     weighted_targets = targets[:, :468] * sqrt_weights[None, :]
 
     cpp_compare("weighted_sources", weighted_sources)
     cpp_compare("weighted_targets", weighted_targets)
 
-    # w = tranposed(j_w) j_w.
     total_weight = np.sum(sqrt_weights * sqrt_weights)
     log("total_weight", total_weight)
 
-    # Let C = (j_w tranposed(j_w)) / (tranposed(j_w) j_w).
-    # Note that C = tranposed(C), hence (I - C) = tranposed(I - C).
-    #
-    # tranposed(A_w) C = tranposed(A_w) j_w tranposed(j_w) / w =
-    # (tranposed(A_w) j_w) tranposed(j_w) / w = c_w tranposed(j_w),
-    #
-    # where c_w = tranposed(A_w) j_w / w is a k x 1 vector calculated here:
     twice_weighted_sources = weighted_sources * sqrt_weights[None, :]
     source_center_of_mass = np.sum(twice_weighted_sources, axis=1) / total_weight
     log("source_center_of_mass", source_center_of_mass)
 
-    # tranposed((I - C) A_w) = tranposed(A_w) (I - C) =
-    # tranposed(A_w) - tranposed(A_w) C = tranposed(A_w) - c_w tranposed(j_w).
     centered_weighted_sources = weighted_sources - np.matmul(
         source_center_of_mass[:, None], sqrt_weights[None, :]
     )
@@ -2928,29 +2603,6 @@ def internal_solve_weighted_orthogonal_problem(sources, targets, sqrt_weights):
 
 
 def compute_optimal_rotation(design_matrix):
-    """
-    This function computes the optimal rotation matrix for a given design matrix. The function first checks if the
-    norm of the design matrix is too small (less than 1e-9). If it is, it prints a warning message stating that the
-    design matrix norm is too small.
-
-    Next, it performs a singular value decomposition (SVD) on the design matrix. The SVD decomposes the design matrix
-    into three matrices: U, Σ, and V^T, where U and V are orthogonal matrices and Σ is a diagonal matrix containing
-    the singular values.
-
-    The function then assigns the U matrix to the variable "postrotation" and the V^T matrix to the variable
-    "prerotation". If the determinant of only one of the postrotation and prerotation matrices is negative,
-    it flips the sign of the third column of the postrotation matrix. The function then calculates the rotation
-    matrix by multiplying the postrotation and prerotation matrices.
-
-    Parameters:
-    -----------
-    design_matrix: Design matrix as a np.ndarray.
-
-    Returns
-    -------
-    rotation: Optimal rotation as a np.ndarray.
-
-    """
     if np.linalg.norm(design_matrix) < 1e-9:
         print("Design matrix norm is too small!")
 
@@ -2975,32 +2627,6 @@ def compute_optimal_rotation(design_matrix):
 def compute_optimal_scale(
     centered_weighted_sources, weighted_sources, weighted_targets, rotation
 ):
-    """
-    The given code computes the optimal scale for a transformation based on weighted sources and targets.
-
-    First, the code applies the given rotation matrix to the centered weighted sources. This results in the
-    rotated_centered_weighted_sources. Next, the code calculates the numerator by taking the element-wise
-    multiplication of the rotated_centered_weighted_sources and weighted_targets, and then summing the resulting
-    array. Similarly, the denominator is calculated by taking the element-wise multiplication of the
-    centered_weighted_sources and weighted_sources, and then summing the resulting array.
-
-    If the denominator is very small (less than 1e-9), a warning message is printed stating that the scale expression
-    denominator is too small. If the numerator divided by the denominator is very small (less than 1e-9),
-    a warning message is printed stating that the scale is too small. Finally, the code returns the result of the
-    numerator divided by the denominator, which represents the optimal scale for the transformation.
-
-    Parameters:
-    -----------
-    centered_weighted_sources: Centered weighted sources as a np.ndarray.
-    weighted_sources: Weighted sources as a np.ndarray.
-    weighted_targets: Weighted targets as a np.ndarray.
-    rotation: Rotation as a np.ndarray.
-
-    Returns
-    -------
-    result: Combination of rotation and scaling with translation matrixes as a np.ndarray.
-
-    """
     rotated_centered_weighted_sources = np.matmul(rotation, centered_weighted_sources)
 
     numerator = np.sum(rotated_centered_weighted_sources * weighted_targets)
@@ -3015,23 +2641,6 @@ def compute_optimal_scale(
 
 
 def combine_transform_matrix(r_and_s, t):
-    """
-    This function combines a rotation and scaling matrix (r_and_s) with a translation matrix (t) to create a single
-    transform matrix. The resulting matrix is a 4x4 matrix, where the top left 3x3 submatrix represents the rotation
-    and scaling, and the last column represents the translation. The function first initializes the result matrix as
-    the identity matrix. Then, it assigns the rotation and scaling matrix to the top left submatrix and the
-    translation vector to the last column of the result matrix.
-
-    Parameters:
-    -----------
-    r_and_s: Rotation and scaling matrix as a np.ndarray.
-    t: Translation matrix as a np.ndarray.
-
-    Returns
-    -------
-    result: Combination of rotation and scaling with translation matrixes as a np.ndarray.
-
-    """
     result = np.eye(4)
     result[:3, :3] = r_and_s
     result[:3, 3] = t

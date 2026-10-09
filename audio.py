@@ -4,11 +4,9 @@ from scipy.io.wavfile import write
 
 
 def record_audio(duration, start_event, ready_event, status, output_path="myrecording.wav", stop_event=None):
-    """Prepare the microphone, then record when the shared event is released."""
     sample_rate = 44100
 
     try:
-        # Fail before the recording session begins if no input device is available.
         sd.query_devices(kind="input")
         ready_event.set()
 
