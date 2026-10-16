@@ -178,21 +178,10 @@ def get_random_topic(category: str | None = None) -> tuple[str, str]:
     try:
         topic = _generate_topic_with_gemini(category)
         return category, topic
-    except Exception as e:
-        print(f"  [Note] Using offline topic bank ({type(e).__name__})")
+    except Exception:
         backup_topics = CATEGORIES.get(category, [])
         if backup_topics:
             topic = random.choice(backup_topics)
         else:
             topic = "The Impact of Modern Innovation on Society"
         return category, topic
-
-
-if __name__ == "__main__":
-    print("=== Testing SpeakWise Topic Generator ===")
-    print(f"Total Available Categories: {len(CATEGORIES)}\n")
-
-    for i in range(3):
-        cat, top = get_random_topic()
-        print(f"[{i+1}] Category: {cat}")
-        print(f"    Topic:    {top}\n")

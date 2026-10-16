@@ -1,5 +1,10 @@
 import os
 import sys
+
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["GLOG_minloglevel"] = "3"
+
 import json
 import time
 import threading
@@ -10,6 +15,11 @@ from dotenv import load_dotenv
 import customtkinter as ctk
 from PIL import Image, ImageTk
 import cv2 as cv
+
+try:
+    cv.setLogLevel(0)
+except Exception:
+    pass
 
 load_dotenv()
 
@@ -52,6 +62,12 @@ from speakwise_database import (
     delete_user,
     get_db_stats,
     save_speech_session,
+    get_all_databases,
+    get_database_tables,
+    get_table_schema,
+    get_table_data,
+    get_table_row_count,
+    delete_table_record,
 )
 from login import hash_password, verify_password, save_session
 from topics import get_random_topic, get_all_categories, CATEGORIES
@@ -60,9 +76,9 @@ from report import print_report, calculate_overall
 import audio
 import video_capture
 from filler_detection import detect_fillers
-from transcription import transcribe_audio
+from transcription import transcribe_audio_detailed
 from video_analysis import analyze_video
-from audio_text import detect_pauses
+from audio_text import detect_pauses, get_audio_duration
 from recording_paths import generate_recording_paths
 
 ctk.set_appearance_mode("dark")
@@ -174,6 +190,140 @@ DURATION_OPTIONS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# SegmentedControl – animated pill-style tab selector
+# ---------------------------------------------------------------------------
+class SegmentedControl(ctk.CTkFrame):
+    """Animated segmented control widget (pill selector) for filter tabs."""
+
+    def __init__(
+        self,
+        master,
+        values=None,
+        default="7 Days",
+        command=None,
+        width=260,
+        height=38,
+        **kwargs
+    ):
+        super().__init__(
+            master,
+            fg_color=("gray90", "#27272A"),
+            corner_radius=8,
+            width=width,
+            height=height,
+            **kwargs
+        )
+
+        self.values = values or ["7 Days", "30 Days", "All Time"]
+        self.command = command
+        self.selected = default if default in self.values else self.values[0]
+        self.buttons = {}
+        self._animation_job = None
+
+        self.grid_propagate(False)
+
+        self.track = ctk.CTkFrame(
+            self,
+            fg_color="transparent",
+            corner_radius=8
+        )
+        self.track.pack(fill="both", expand=True, padx=2, pady=2)
+
+        self.track.grid_rowconfigure(0, weight=1)
+        for index, value in enumerate(self.values):
+            self.track.grid_columnconfigure(index, weight=1, uniform="segment")
+
+        self.indicator = ctk.CTkFrame(
+            self.track,
+            fg_color=("white", "#3F3F46"),
+            corner_radius=7
+        )
+        self.indicator.place(
+            relx=0,
+            rely=0,
+            relheight=1,
+            relwidth=1 / len(self.values),
+            bordermode="outside"
+        )
+
+        for index, value in enumerate(self.values):
+            button = ctk.CTkButton(
+                self.track,
+                text=value,
+                fg_color="transparent",
+                hover_color=("gray85", "#35353B"),
+                text_color=("gray20", "#FAFAFA"),
+                font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+                corner_radius=7,
+                border_width=0,
+                height=height - 4,
+                command=lambda v=value: self.set(v)
+            )
+            button.grid(
+                row=0,
+                column=index,
+                sticky="nsew",
+                padx=0,
+                pady=0
+            )
+            self.buttons[value] = button
+
+        self.track.bind("<Configure>", self._position_indicator)
+        self.after(10, self._position_indicator)
+
+    def _position_indicator(self, event=None):
+        if not self.values:
+            return
+        index = self.values.index(self.selected)
+        count = len(self.values)
+        self.indicator.place_configure(
+            relx=index / count,
+            rely=0,
+            relwidth=1 / count,
+            relheight=1
+        )
+        self.indicator.lower()
+        for button in self.buttons.values():
+            button.lift()
+
+    def set(self, value, notify=True):
+        if value not in self.values:
+            return
+        if self._animation_job:
+            self.after_cancel(self._animation_job)
+            self._animation_job = None
+
+        old_value = self.selected
+        self.selected = value
+        start = self.values.index(old_value) / len(self.values)
+        target = self.values.index(value) / len(self.values)
+        steps = 8
+
+        def animate(step=0):
+            progress = min(step / steps, 1)
+            # Smooth ease-in-out transition.
+            eased = progress * progress * (3 - 2 * progress)
+            position = start + (target - start) * eased
+            self.indicator.place_configure(
+                relx=position,
+                rely=0,
+                relwidth=1 / len(self.values),
+                relheight=1
+            )
+            if step < steps:
+                self._animation_job = self.after(15, lambda: animate(step + 1))
+            else:
+                self._animation_job = None
+
+        animate()
+        if notify and self.command:
+            self.command(value)
+
+    def get(self):
+        return self.selected
+
+
 class SpeakWiseApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -197,8 +347,8 @@ class SpeakWiseApp(ctk.CTk):
 
         try:
             initialize_database()
-        except Exception as e:
-            print(f"[DB Notice] {e}")
+        except Exception:
+            pass
 
         self.current_user = None
 
@@ -494,8 +644,7 @@ class SpeakWiseApp(ctk.CTk):
         cat_backend = self.selected_category.get("backend_key")
         try:
             cat_name, topic_title = get_random_topic(cat_backend)
-        except Exception as e:
-            print(f"[Topic Gen Notice] {e}")
+        except Exception:
             topic_title = "The Evolution of Modern Artificial Intelligence"
 
         focus_pts = [
@@ -538,21 +687,18 @@ class SpeakWiseApp(ctk.CTk):
         self._stop_home_background_video()
 
         if not os.path.exists(self.home_video_path):
-            print(f"[Home Video] Video not found: {self.home_video_path}")
             return
 
         try:
             self.home_video = cv.VideoCapture(self.home_video_path)
             if not self.home_video.isOpened():
-                print(f"[Home Video] Could not open: {self.home_video_path}")
                 self.home_video.release()
                 self.home_video = None
                 return
 
             self.home_video_running = True
             self._update_home_background_video()
-        except Exception as e:
-            print(f"[Home Video] Start error: {e}")
+        except Exception:
             self.home_video = None
             self.home_video_running = False
 
@@ -615,8 +761,7 @@ class SpeakWiseApp(ctk.CTk):
 
             self.safe_after(33, self._update_home_background_video)
 
-        except Exception as e:
-            print(f"[Home Video] Frame error: {e}")
+        except Exception:
             self._stop_home_background_video()
 
     def show_page(self, page_key):
@@ -1202,8 +1347,7 @@ class SpeakWiseApp(ctk.CTk):
         def _worker():
             try:
                 cat_name, topic_title = get_random_topic(cat_backend)
-            except Exception as e:
-                print(f"[Topic Gen Notice] {e}")
+            except Exception:
                 topic_title = "The Evolution of Modern Artificial Intelligence"
 
             focus_pts = [
@@ -1777,8 +1921,8 @@ class SpeakWiseApp(ctk.CTk):
                     user_name=user_name,
                     speaking_time_desc=dur_desc,
                 )
-            except Exception as e:
-                print(f"[Coach Async Notice] {e}")
+            except Exception:
+                pass
 
             def _on_ready():
                 self.coach_session = session
@@ -1985,8 +2129,8 @@ class SpeakWiseApp(ctk.CTk):
             try:
                 if self.coach_session:
                     reply = self.coach_session.send_message(user_msg)
-            except Exception as e:
-                print(f"[PrepChat Error] {e}")
+            except Exception:
+                pass
 
             def _update_ui():
                 self._add_ai_bubble(reply)
@@ -2407,6 +2551,7 @@ class SpeakWiseApp(ctk.CTk):
             audio_ready = threading.Event()
             video_ready = threading.Event()
             recording_status = {}
+            self.recording_status = recording_status
             timing = {}
 
             audio_th = threading.Thread(
@@ -2531,12 +2676,24 @@ class SpeakWiseApp(ctk.CTk):
 
         def _analysis_job():
             video_report = None
-            try:
-                video_report = analyze_video(self.video_path)
-            except Exception as e:
-                print(f"[Video Analysis] {e}")
+            recording_status = getattr(self, "recording_status", {})
+            video_status = "unavailable"
+            video_error = recording_status.get("video_error")
+            if recording_status.get("video_analysis_eligible", True):
+                try:
+                    video_report = analyze_video(self.video_path)
+                    video_status = "success" if video_report else "unavailable"
+                except Exception as error:
+                    video_status = "failed"
+                    video_error = str(error)
 
-            transcription = transcribe_audio(self.audio_path) or ""
+            audio_duration = get_audio_duration(self.audio_path)
+            audio_status = "available" if audio_duration > 0 and not recording_status.get("audio_error") else "unavailable"
+            if recording_status.get("audio_error"):
+                transcription_result = {"text": "", "status": "failed", "error": recording_status["audio_error"]}
+            else:
+                transcription_result = transcribe_audio_detailed(self.audio_path)
+            transcription = transcription_result["text"]
             words = transcription.split()
             total_words = len(words)
 
@@ -2550,7 +2707,8 @@ class SpeakWiseApp(ctk.CTk):
             except Exception:
                 pass
 
-            dur = self.selected_duration["seconds"]
+            target_duration = self.selected_duration["seconds"]
+            dur = audio_duration or target_duration
 
             report_data = print_report(
                 video_report=video_report,
@@ -2562,6 +2720,11 @@ class SpeakWiseApp(ctk.CTk):
                 topic=self.current_topic_data["title"],
                 relevance_result=relevance_res,
                 filler_breakdown=fillers,
+                transcription_status=transcription_result["status"],
+                transcription_error=transcription_result.get("error"),
+                audio_status=audio_status,
+                video_status=video_status,
+                video_error=video_error,
             )
 
             if self.current_user:
@@ -2570,19 +2733,19 @@ class SpeakWiseApp(ctk.CTk):
                         user_id=self.current_user["user_id"],
                         category=self.selected_category["name"],
                         topic_name=self.current_topic_data["title"],
-                        speaking_time=dur,
+                        speaking_time=target_duration,
                         audio_path=self.audio_path,
                         video_path=self.video_path,
                         transcription=transcription,
                         report=report_data,
                     )
-                except Exception as e:
-                    print(f"[Save Error] {e}")
+                except Exception:
+                    pass
             else:
                 self.last_unsaved_session = {
                     "category": self.selected_category["name"],
                     "topic_name": self.current_topic_data["title"],
-                    "speaking_time": dur,
+                    "speaking_time": target_duration,
                     "audio_path": self.audio_path,
                     "video_path": self.video_path,
                     "transcription": transcription,
@@ -2734,9 +2897,10 @@ class SpeakWiseApp(ctk.CTk):
         )
         rep_title.pack(side="left", padx=(0, 12))
 
-        badge_txt = "⚠️ No Speech Detected" if is_silent else ("🌟 Outstanding" if overall_val >= 8.0 else ("🎯 Solid Effort" if overall_val >= 5.5 else "📈 Practice Needed"))
-        badge_fg = "#2b141a" if is_silent else ("#172825" if overall_val >= 8.0 else ("#221c1e" if overall_val >= 5.5 else "#2b141a"))
-        badge_tc = COLOR_RUBY if is_silent else (COLOR_CYAN if overall_val >= 8.0 else (COLOR_ICE if overall_val >= 5.5 else COLOR_RUBY))
+        analysis_unavailable = rep.get("transcription_status") in ("failed", "audio_missing") or rep.get("audio_status") == "unavailable"
+        badge_txt = "⚠️ Analysis Unavailable" if analysis_unavailable else ("⚠️ No Speech Detected" if is_silent else ("🌟 Outstanding" if overall_val >= 8.0 else ("🎯 Solid Effort" if overall_val >= 5.5 else "📈 Practice Needed")))
+        badge_fg = "#2b141a" if (is_silent or analysis_unavailable) else ("#172825" if overall_val >= 8.0 else ("#221c1e" if overall_val >= 5.5 else "#2b141a"))
+        badge_tc = COLOR_RUBY if (is_silent or analysis_unavailable) else (COLOR_CYAN if overall_val >= 8.0 else (COLOR_ICE if overall_val >= 5.5 else COLOR_RUBY))
 
         stat_badge = ctk.CTkLabel(
             title_row,
@@ -2914,7 +3078,12 @@ class SpeakWiseApp(ctk.CTk):
         pace_cv.pack(pady=(2, 6))
         self._draw_pace_gauge(pace_cv, pace_wpm if not is_silent else 0)
 
-        if is_silent:
+        analysis_unavailable = rep.get("transcription_status") in ("failed", "audio_missing") or rep.get("audio_status") == "unavailable"
+        if analysis_unavailable:
+            pace_badge_text = " Analysis unavailable "
+            pace_badge_bg = "#2b141a"
+            pace_badge_tc = COLOR_RUBY
+        elif is_silent:
             pace_badge_text = " 0 WPM (Silent) "
             pace_badge_bg = "#2b141a"
             pace_badge_tc = COLOR_RUBY
@@ -3045,7 +3214,22 @@ class SpeakWiseApp(ctk.CTk):
         )
         self.audio_status_lbl.pack(side="right", padx=(8, 0))
 
-        if is_silent:
+        if analysis_unavailable:
+            no_speech_box = ctk.CTkFrame(tr_in, fg_color="#2b141a", corner_radius=8, border_width=1, border_color=COLOR_RUBY)
+            no_speech_box.pack(fill="x", pady=(0, 4))
+            detail = rep.get("transcription_error") or "Audio could not be analyzed. Check the microphone recording and model setup."
+            ns_lbl = ctk.CTkLabel(
+                no_speech_box,
+                text=f"⚠️ Speech analysis unavailable.\n{detail}",
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+                text_color=COLOR_RUBY,
+                justify="left",
+                padx=14,
+                pady=12,
+                wraplength=460,
+            )
+            ns_lbl.pack(anchor="w")
+        elif is_silent:
             no_speech_box = ctk.CTkFrame(tr_in, fg_color="#2b141a", corner_radius=8, border_width=1, border_color=COLOR_RUBY)
             no_speech_box.pack(fill="x", pady=(0, 4))
             ns_lbl = ctk.CTkLabel(
@@ -3168,9 +3352,8 @@ class SpeakWiseApp(ctk.CTk):
         ]
 
         for icon, name, val, bar_color, desc in score_rows:
-            if val is None:
-                val = 0.0
-            val_f = float(val)
+            score_available = val is not None
+            val_f = float(val) if score_available else 0.0
 
             s_row = ctk.CTkFrame(d_inner, fg_color="transparent")
             s_row.pack(fill="x", pady=3)
@@ -3185,7 +3368,7 @@ class SpeakWiseApp(ctk.CTk):
             pbar.pack(side="left", padx=8)
             pbar.set(max(0.0, min(1.0, val_f / 10.0)))
 
-            vl = ctk.CTkLabel(top_line, text=f"{val_f:.1f}/10", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"), text_color=TEXT_WHITE)
+            vl = ctk.CTkLabel(top_line, text=f"{val_f:.1f}/10" if score_available else "N/A", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"), text_color=TEXT_WHITE)
             vl.pack(side="right")
 
             dl = ctk.CTkLabel(s_row, text=desc, font=ctk.CTkFont(family=FONT_FAMILY, size=10), text_color=TEXT_SUBTLE, justify="left", wraplength=320, anchor="w")
@@ -3310,8 +3493,7 @@ class SpeakWiseApp(ctk.CTk):
 
             self._audio_play_timer = self.after(100, _update_progress)
 
-        except Exception as e:
-            print(f"[Audio Playback Error] {e}")
+        except Exception:
             self._stop_report_audio()
 
     def _draw_waveform(self, canvas, progress_ratio=0.0):
@@ -3741,6 +3923,7 @@ class SpeakWiseApp(ctk.CTk):
         self.history_selected_topic_filter = "All Topics"
         self.history_selected_perf_filter = "All Scores"
         self.history_sort_order = "Newest First"
+        self.history_date_filter = "All Time"
 
         self._render_history_page()
         return frame
@@ -3869,8 +4052,8 @@ class SpeakWiseApp(ctk.CTk):
                     "video_path": r.get("video_path", ""),
                 })
 
-        except Exception as e:
-            print(f"[History DB Load Notice] {e}")
+        except Exception:
+            pass
 
         return sessions
 
@@ -4109,17 +4292,14 @@ class SpeakWiseApp(ctk.CTk):
 
         f_d_lbl = ctk.CTkLabel(f_in, text="📅  Date Range", font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=TEXT_SUBTLE)
         f_d_lbl.pack(anchor="w", pady=(0, 4))
-        self.f_date_menu = ctk.CTkOptionMenu(
+        self.f_date_seg = SegmentedControl(
             f_in,
-            values=["Last 30 days", "Last 7 days", "All time"],
-            fg_color="#1c1719",
-            button_color="#2b2326",
-            dropdown_fg_color="#1c1719",
-            text_color=COLOR_ICE,
-            corner_radius=8,
-            height=34,
+            values=["7 Days", "30 Days", "All Time"],
+            default=getattr(self, "history_date_filter", "All Time"),
+            command=self._on_date_seg_change,
+            height=36,
         )
-        self.f_date_menu.pack(fill="x", pady=(0, 10))
+        self.f_date_seg.pack(fill="x", pady=(0, 10))
 
         f_t_lbl = ctk.CTkLabel(f_in, text="📑  Topic", font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=TEXT_SUBTLE)
         f_t_lbl.pack(anchor="w", pady=(0, 4))
@@ -4211,6 +4391,19 @@ class SpeakWiseApp(ctk.CTk):
         if sessions is None:
             sessions = self._load_user_history_from_db()
             self.cached_history_sessions = sessions
+
+        # --- Date range filter via SegmentedControl ---
+        date_filter = getattr(self, "history_date_filter", "All Time")
+        if date_filter != "All Time":
+            import datetime
+            cutoff_days = 7 if date_filter == "7 Days" else 30
+            cutoff = datetime.datetime.now() - datetime.timedelta(days=cutoff_days)
+            def _parse_date(s):
+                try:
+                    return datetime.datetime.strptime(s["date"], "%d %b %Y, %I:%M %p")
+                except Exception:
+                    return datetime.datetime.min
+            sessions = [s for s in sessions if _parse_date(s) >= cutoff]
 
         if self.history_selected_topic_filter != "All Topics":
             sessions = [s for s in sessions if s["category"].lower() == self.history_selected_topic_filter.lower()]
@@ -4485,13 +4678,22 @@ class SpeakWiseApp(ctk.CTk):
         self.history_sort_order = val
         self._render_session_cards()
 
+    def _on_date_seg_change(self, value):
+        """Called automatically when the animated date SegmentedControl changes."""
+        self.history_date_filter = value
+        self._render_session_cards()
+
     def _apply_history_filters(self):
         self.history_selected_topic_filter = self.f_topic_menu.get()
         self.history_selected_perf_filter = self.f_perf_menu.get()
+        if hasattr(self, "f_date_seg"):
+            self.history_date_filter = self.f_date_seg.get()
         self._render_session_cards()
 
     def _clear_filters(self):
-        self.f_date_menu.set("Last 30 days")
+        if hasattr(self, "f_date_seg"):
+            self.f_date_seg.set("All Time", notify=False)
+        self.history_date_filter = "All Time"
         self.f_topic_menu.set("All Topics")
         self.f_perf_menu.set("All Scores")
         self.history_selected_topic_filter = "All Topics"
@@ -4979,8 +5181,8 @@ class SpeakWiseApp(ctk.CTk):
                         **self.last_unsaved_session,
                     )
                     self.last_unsaved_session = None
-                except Exception as e:
-                    print(f"[Auto-Save Session Error] {e}")
+                except Exception:
+                    pass
         else:
             u_name = "Sign In / Register"
             initials = "👤"

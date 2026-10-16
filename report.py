@@ -417,15 +417,23 @@ def print_report(
     topic="",
     relevance_result=None,
     filler_breakdown=None,
+    transcription_status=None,
+    transcription_error=None,
+    audio_status="available",
+    video_status="unavailable",
+    video_error=None,
 ):
-    is_silent = (total_words == 0 or not transcription.strip())
+    transcription_status = transcription_status or ("success" if transcription.strip() else "no_speech")
+    confirmed_silence = transcription_status == "no_speech" and audio_status == "available"
+    analysis_failed = transcription_status in ("failed", "audio_missing") or audio_status != "available"
+    is_silent = confirmed_silence
 
-    fluency = score_speech_fluency(total_words, total_fillers, duration=duration)
-    pause_mgmt = score_pause_management(pauses, duration, total_words=total_words)
+    fluency = score_speech_fluency(total_words, total_fillers, duration=duration) if not analysis_failed else None
+    pause_mgmt = score_pause_management(pauses, duration, total_words=total_words) if not analysis_failed else None
     eye = score_eye_contact(video_report)
     head = score_head_stability(video_report)
-    pace = score_speech_pace(total_words, duration)
-    relevance = score_topic_relevance(relevance_result, total_words=total_words)
+    pace = score_speech_pace(total_words, duration) if not analysis_failed else None
+    relevance = score_topic_relevance(relevance_result, total_words=total_words) if not analysis_failed else None
 
     scores = {
         "fluency": fluency,
@@ -436,10 +444,18 @@ def print_report(
         "relevance": relevance,
     }
 
-    overall = calculate_overall(scores, total_words=total_words)
+    overall = 0.0 if confirmed_silence else calculate_overall(scores, total_words=total_words if not analysis_failed else None)
     scores["overall"] = overall
 
-    what_went_wrong = generate_what_went_wrong(
+    if analysis_failed:
+        what_went_wrong = [
+            "Audio analysis unavailable: " + (transcription_error or "The recording could not be transcribed reliably.")
+        ]
+        if video_error:
+            what_went_wrong.append("Video analysis unavailable: " + video_error)
+        strengths, improvements = [], ["Check that the microphone and analysis models are available, then record again."]
+    else:
+        what_went_wrong = generate_what_went_wrong(
         fluency,
         pause_mgmt,
         eye,
@@ -453,9 +469,9 @@ def print_report(
         video_report=video_report,
         relevance_result=relevance_result,
         filler_breakdown=filler_breakdown,
-    )
+        )
 
-    strengths, improvements = generate_feedback(
+        strengths, improvements = generate_feedback(
         fluency,
         pause_mgmt,
         eye,
@@ -468,75 +484,15 @@ def print_report(
         duration,
         video_report,
         relevance_result,
-    )
+        )
+        if video_status != "success":
+            what_went_wrong.append("Video analysis unavailable: " + (video_error or "No usable webcam video was analyzed."))
 
     wpm = int(round(total_words / (duration / 60.0))) if duration > 0 and total_words > 0 else 0
     filler_pct = (total_fillers / total_words * 100.0) if total_words > 0 else 0.0
 
     eye_pct = video_report.get("eye_contact", {}).get("contact_percentage", 0.0) if video_report else 0.0
     head_pct = video_report.get("head_position", {}).get("percentage", 0.0) if video_report else 0.0
-
-    print()
-    print("=" * 60)
-    print("             SPEAKWISE AI -- PERFORMANCE REPORT")
-    print("=" * 60)
-
-    if topic:
-        print(f"\n  Topic: \"{topic}\"")
-
-    if is_silent:
-        print("\n  [!] [NO SPEECH DETECTED] The audio file did not contain audible speech.")
-    elif transcription:
-        print("\n--- What You Said ---")
-        print(f"  {transcription}")
-
-
-    print("\n--- Scores (out of 10) ---")
-    bar_width = 20
-    score_items = [
-        ("Speech Fluency", fluency),
-        ("Pause Management", pause_mgmt),
-        ("Eye Contact", eye),
-        ("Head Stability", head),
-        ("Speech Pace", pace),
-        ("Topic Relevance", relevance),
-    ]
-
-    for label, value in score_items:
-        if value is None:
-            print(f"  {label:<20} {'N/A':>6}   (unavailable)")
-            continue
-
-        filled = int(round(value / 10.0 * bar_width))
-        empty = bar_width - filled
-        bar = "[" + "#" * filled + "." * empty + "]"
-        print(f"  {label:<20} {value:>4}/10    {bar}")
-
-    print("-" * 60)
-    filled = int(round(overall / 10.0 * bar_width))
-    empty = bar_width - filled
-    bar = "[" + "#" * filled + "." * empty + "]"
-    print(f"  {'OVERALL RATING':<20} {overall:>4}/10    {bar}")
-    print("-" * 60)
-
-    print("\n--- What Went Wrong (Specific Flaws & Mistakes) ---")
-    for item in what_went_wrong:
-        if item.startswith("No major"):
-            print(f"  [OK] {item}")
-        else:
-            print(f"  [!] {item}")
-
-    if strengths:
-        print("\n--- What You Did Well ---")
-        for item in strengths:
-            print(f"  [+] {item}")
-
-    if improvements:
-        print("\n--- Actionable Advice ---")
-        for item in improvements:
-            print(f"  [->] {item}")
-
-    print("=" * 60)
 
     return {
         "fluency": fluency,
@@ -561,4 +517,9 @@ def print_report(
         "transcription": transcription,
         "topic": topic,
         "duration": duration,
+        "transcription_status": transcription_status,
+        "transcription_error": transcription_error,
+        "audio_status": audio_status,
+        "video_status": video_status,
+        "video_error": video_error,
     }

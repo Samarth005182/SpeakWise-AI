@@ -4,7 +4,7 @@ import warnings
 
 import torch
 from crisperwhisper import CrisperWhisperModel
-from audio_text import is_audio_silent
+from audio_text import get_audio_stats
 
 warnings.filterwarnings(
     "ignore",
@@ -16,7 +16,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 warnings.filterwarnings("ignore")
 
 
-MODEL_PATH = r".\models\CrisperWhisper2.0_small"
+MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "CrisperWhisper2.0_small")
 
 model = None
 model_device = None
@@ -50,7 +50,6 @@ def load_model():
             if device != "cuda":
                 raise
 
-            print(f"GPU model loading failed ({error}). Falling back to CPU.")
             model = CrisperWhisperModel(
                 MODEL_PATH,
                 backend="transformers",
@@ -60,6 +59,41 @@ def load_model():
             model_device = "cpu"
 
     return model
+
+
+def transcribe_audio_detailed(audio_file):
+    """Transcribe an audio file and retain the reason when no transcript is returned."""
+    if not os.path.exists(audio_file):
+        return {"text": "", "status": "audio_missing", "error": f"Audio file not found: {audio_file}"}
+
+    try:
+        audio_stats = get_audio_stats(audio_file)
+        # Use a conservative hard-silence gate. The looser speech detector is
+        # useful for diagnostics, but can reject quiet voices before ASR sees them.
+        if audio_stats["duration"] <= 0 or (
+            audio_stats["max_amplitude"] < 0.005 and audio_stats["mean_rms"] < 0.0005
+        ):
+            return {"text": "", "status": "no_speech", "error": None,
+                    "audio_diagnostics": audio_stats}
+        silence_check_error = None
+    except Exception as error:
+        # Let ASR make the decision if acoustic validation itself is unavailable.
+        audio_stats = None
+        silence_check_error = str(error)
+
+    try:
+        whisper_model = load_model()
+        result = whisper_model.transcribe(audio_file, mode="verbatim", language="en")
+        raw_text = result.text if result and hasattr(result, "text") else ""
+        cleaned_text = _clean_transcription(raw_text)
+        if not cleaned_text:
+            return {"text": "", "status": "no_speech", "error": None,
+                    "diagnostic": silence_check_error, "audio_diagnostics": audio_stats}
+        return {"text": cleaned_text, "status": "success", "error": None,
+                "audio_diagnostics": audio_stats}
+    except Exception as error:
+        return {"text": "", "status": "failed", "error": str(error),
+                "diagnostic": silence_check_error}
 
 
 def _clean_transcription(text):
@@ -94,32 +128,4 @@ def _clean_transcription(text):
 
 
 def transcribe_audio(audio_file):
-    if not os.path.exists(audio_file):
-        print("ERROR: Audio file not found!")
-        return ""
-
-    try:
-        if is_audio_silent(audio_file):
-            print("[Audio] Silence detected (no vocal activity). Skipping Whisper inference.")
-            return ""
-    except Exception as e:
-        print(f"[Audio Check Warning] {e}")
-
-    try:
-        whisper_model = load_model()
-
-        result = whisper_model.transcribe(
-            audio_file,
-            mode="verbatim",
-            language="en",
-        )
-
-        raw_text = result.text if result and hasattr(result, "text") else ""
-        cleaned_text = _clean_transcription(raw_text)
-
-        return cleaned_text
-
-    except Exception as e:
-        print("\nTranscription error:")
-        print(e)
-        return ""
+    return transcribe_audio_detailed(audio_file)["text"]

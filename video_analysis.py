@@ -29,7 +29,7 @@ from face_geometry import (
 
 
 VIDEO_FILE = "myrecording.avi"
-MODEL_FILE = "models/face_landmarker.task"
+MODEL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "face_landmarker.task")
 
 
 CALIBRATION_SECONDS = 2.0
@@ -963,126 +963,11 @@ def calculate_eye_contact(frames):
 
 
 def print_calibration(calibration):
-
-    print()
-    print("========== CALIBRATION ==========")
-
-    print(
-        f"left_x: {calibration['left_x']:.3f}"
-    )
-
-    print(
-        f"left_y: {calibration['left_y']:.3f}"
-    )
-
-    print(
-        f"right_x: {calibration['right_x']:.3f}"
-    )
-
-    print(
-        f"right_y: {calibration['right_y']:.3f}"
-    )
-
-    print(
-        f"yaw: {calibration['yaw']:.3f}"
-    )
-
-    print(
-        f"pitch: {calibration['pitch']:.3f}"
-    )
-
-    print(
-        f"roll: {calibration['roll']:.3f}"
-    )
-
+    pass
 
 
 def print_head_diagnostics(frames, calibration):
-
-    yaw_values = [
-        frame.yaw
-        for frame in frames
-        if frame.yaw is not None
-    ]
-
-    pitch_values = [
-        frame.pitch
-        for frame in frames
-        if frame.pitch is not None
-    ]
-
-    roll_values = [
-        frame.roll
-        for frame in frames
-        if frame.roll is not None
-    ]
-
-    print()
-    print("========== HEAD POSE DIAGNOSTICS ==========")
-
-    if yaw_values:
-
-        print(
-            f"Raw yaw   — min: "
-            f"{min(yaw_values):+.1f}°  "
-            f"max: {max(yaw_values):+.1f}°  "
-            f"median: {median(yaw_values):+.1f}°  "
-            f"baseline: {calibration['yaw']}"
-        )
-
-    else:
-
-        print("Raw yaw   — unavailable")
-
-    if pitch_values:
-
-        print(
-            f"Raw pitch — min: "
-            f"{min(pitch_values):+.1f}°  "
-            f"max: {max(pitch_values):+.1f}°  "
-            f"median: {median(pitch_values):+.1f}°  "
-            f"baseline: {calibration['pitch']}"
-        )
-
-    else:
-
-        print("Raw pitch — unavailable")
-
-    if roll_values:
-
-        print(
-            f"Raw roll  — min: "
-            f"{min(roll_values):+.1f}°  "
-            f"max: {max(roll_values):+.1f}°  "
-            f"median: {median(roll_values):+.1f}°  "
-            f"baseline: {calibration['roll']}"
-        )
-
-    else:
-
-        print("Raw roll  — unavailable")
-
-    print(
-        f"\nCalibration samples: "
-        f"{calibration['calibration_samples']}/20"
-    )
-
-    print(
-        f"Iris baseline — "
-        f"L({calibration['left_x']:.3f}, "
-        f"{calibration['left_y']:.3f}) "
-        f"R({calibration['right_x']:.3f}, "
-        f"{calibration['right_y']:.3f})"
-    )
-
-    if abs(calibration["pitch"]) > 45:
-
-        print(
-            "WARNING: Baseline pitch is large — "
-            "user may have been looking up/down "
-            "during calibration."
-        )
-
+    pass
 
 
 def print_state_breakdown(
@@ -1090,54 +975,7 @@ def print_state_breakdown(
     total_duration,
     eye_report,
 ):
-
-    print()
-    print("========== GAZE STATE BREAKDOWN ==========")
-
-    ordered_states = [
-        "face_missing",
-        "camera_contact",
-        "head_turned",
-        "looking_up",
-        "looking_down",
-        "looking_left",
-        "looking_right",
-    ]
-
-    for state in ordered_states:
-
-        duration = durations.get(
-            state,
-            0.0,
-        )
-
-        if duration <= 0:
-            continue
-
-        percentage = (
-            duration / total_duration * 100.0
-            if total_duration > 0
-            else 0.0
-        )
-
-        print(
-            f"  {state:<30}"
-            f"{duration:5.1f}s"
-            f" ({percentage:5.1f}%)"
-        )
-
-    print(
-        f"  {'TOTAL':<30}"
-        f"{total_duration:5.1f}s"
-    )
-
-    print(
-        f"  Trackable: "
-        f"{eye_report['trackable_time']:.1f}s "
-        f"Confidence: "
-        f"{eye_report['confidence']:.0f}%"
-    )
-
+    pass
 
 
 def print_video_presence_report(
@@ -1146,250 +984,11 @@ def print_video_presence_report(
     head_report,
     calibration,
 ):
-
-    print()
-    print(
-        "=================================================="
-    )
-
-    print(
-        "          VIDEO PRESENCE ANALYSIS"
-    )
-
-    print(
-        "=================================================="
-    )
-
-    print()
-
-    print(
-        f"Video duration:  "
-        f"{total_duration:.1f}s"
-    )
-
-    reliable = (
-        calibration["calibration_samples"] >= 20
-    )
-
-    print(
-        "Calibration:     "
-        + (
-            f"reliable "
-            f"({calibration['calibration_samples']}/20 "
-            f"neutral frames)"
-            if reliable
-            else
-            f"limited "
-            f"({calibration['calibration_samples']}/20 "
-            f"neutral frames)"
-        )
-    )
-
-
-    print()
-    print("--- Camera Eye Contact ---")
-
-    print(
-        f"Contact time:      "
-        f"{eye_report['contact_time']:.1f}s / "
-        f"{eye_report['trackable_time']:.1f}s "
-        f"trackable "
-        f"({eye_report['contact_percentage']:.0f}%)"
-    )
-
-    print(
-        f"Overall contact:   "
-        f"{eye_report['overall_percentage']:.0f}% "
-        f"of total video"
-    )
-
-    print(
-        f"Confidence:        "
-        f"{eye_report['confidence']:.0f}% "
-        f"(trackable / total video)"
-    )
-
-    print(
-        f"Face visible:      "
-        f"{eye_report['confidence']:.0f}% "
-        f"of video"
-    )
-
-    print(
-        f"Longest streak:    "
-        f"{eye_report['longest_streak']:.1f}s"
-    )
-
-    print(
-        f"Times looked away: "
-        f"{eye_report['times_looked_away']}"
-    )
-
-    if eye_report["contact_percentage"] >= 75:
-
-        assessment = "good"
-
-    elif eye_report["contact_percentage"] >= 50:
-
-        assessment = "fair"
-
-    else:
-
-        assessment = "needs improvement"
-
-    print(
-        f"Assessment:        {assessment}"
-    )
-
-
-    print()
-    print("--- Head Position ---")
-
-    print(
-        f"Facing forward:    "
-        f"{head_report['forward_time']:.1f}s "
-        f"({head_report['percentage']:.0f}%)"
-    )
-
-    print(
-        f"Longest steady:    "
-        f"{head_report['longest_steady']:.1f}s"
-    )
-
-    if head_report["percentage"] >= 75:
-
-        print("Assessment:        good")
-
-    elif head_report["percentage"] >= 50:
-
-        print("Assessment:        fair")
-
-    else:
-
-        print("Assessment:        needs improvement")
-
-
-    print()
-    print("--- Coaching Focus ---")
-
-    if eye_report["contact_percentage"] >= 75:
-
-        print(
-            "  * Camera eye contact was generally strong; "
-            "keep that steady presence."
-        )
-
-    else:
-
-        print(
-            "  * Try to maintain eye contact with the "
-            "camera more consistently."
-        )
-
-    if head_report["percentage"] >= 75:
-
-        print(
-            "  * Your head position was steady and "
-            "camera-facing for most of the response."
-        )
-
-    else:
-
-        print(
-            "  * Try to keep your head facing the camera "
-            "more consistently."
-        )
-
+    pass
 
 
 def print_sample_data(frames):
-
-    print()
-    print(
-        "========== SAMPLE HEAD / GAZE DATA =========="
-    )
-
-    sample_indices = [
-        0,
-        len(frames) // 4,
-        len(frames) // 2,
-        (len(frames) * 3) // 4,
-        len(frames) - 1,
-    ]
-
-    used = set()
-
-    for index in sample_indices:
-
-        if index in used:
-            continue
-
-        if index < 0 or index >= len(frames):
-            continue
-
-        used.add(index)
-
-        frame = frames[index]
-
-        timestamp = (
-            frame.timestamp
-            if frame.timestamp is not None
-            else 0.0
-        )
-
-        if not frame.face_detected:
-
-            print(
-                f"[{timestamp:5.1f}s] "
-                f"Face not detected"
-            )
-
-            continue
-
-        yaw = (
-            f"{frame.yaw:+.1f}"
-            if frame.yaw is not None
-            else "N/A"
-        )
-
-        pitch = (
-            f"{frame.pitch:+.1f}"
-            if frame.pitch is not None
-            else "N/A"
-        )
-
-        roll = (
-            f"{frame.roll:+.1f}"
-            if frame.roll is not None
-            else "N/A"
-        )
-
-        left = (
-            f"({frame.left_x:.3f}, "
-            f"{frame.left_y:.3f})"
-            if frame.left_x is not None
-            and frame.left_y is not None
-            else "N/A"
-        )
-
-        right = (
-            f"({frame.right_x:.3f}, "
-            f"{frame.right_y:.3f})"
-            if frame.right_x is not None
-            and frame.right_y is not None
-            else "N/A"
-        )
-
-        print(
-            f"[{timestamp:5.1f}s] "
-            f"state={frame.state:<16} "
-            f"yaw={yaw:>7} "
-            f"pitch={pitch:>7} "
-            f"roll={roll:>7} "
-            f"L={left} "
-            f"R={right}"
-        )
-
+    pass
 
 
 def analyze_video(video_file=None):
@@ -1398,11 +997,6 @@ def analyze_video(video_file=None):
         video_file = VIDEO_FILE
 
     if not os.path.exists(video_file):
-
-        print(
-            f"Video file not found: {video_file}"
-        )
-
         return None
 
 

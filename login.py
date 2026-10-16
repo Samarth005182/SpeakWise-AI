@@ -28,11 +28,6 @@ def verify_password(password, password_hash):
 
 
 def register():
-    print("\n" + "=" * 46)
-    print("           CREATE NEW ACCOUNT")
-    print("=" * 46)
-    print("  (Type 'b' or 'back' at any step to go back)\n")
-
     step = 1
     name = ""
     email = ""
@@ -40,117 +35,95 @@ def register():
 
     while True:
         if step == 1:
-            val = input("  Enter full name  : ").strip()
+            val = input().strip()
             if val.lower() in ("b", "back"):
-                print("\n  Registration cancelled. Returning to main menu...\n")
                 return None
 
             if not val or len(val) < 2:
-                print("  [-] Name must be at least 2 characters.\n")
                 continue
 
             name = val
             step = 2
 
         elif step == 2:
-            val = input("  Enter email      : ").strip().lower()
+            val = input().strip().lower()
             if val.lower() in ("b", "back"):
-                print("  <- Going back to Name...\n")
                 step = 1
                 continue
 
             if not val or "@" not in val or "." not in val:
-                print("  [-] Please enter a valid email address.\n")
                 continue
 
             email = val
             step = 3
 
         elif step == 3:
-            val = input("  Enter password   : ").strip()
+            val = input().strip()
             if val.lower() in ("b", "back"):
-                print("  <- Going back to Email...\n")
                 step = 2
                 continue
 
             if not val or len(val) < 6:
-                print("  [-] Password must be at least 6 characters.\n")
                 continue
 
             password = val
             step = 4
 
         elif step == 4:
-            confirm = input("  Confirm password : ").strip()
+            confirm = input().strip()
             if confirm.lower() in ("b", "back"):
-                print("  <- Going back to Password...\n")
                 step = 3
                 continue
 
             if password != confirm:
-                print("  [-] Passwords do not match. Try again or type 'b' to go back.\n")
                 continue
 
             success, result = register_user(name, email, password)
             if success:
-                print("\n  [+] Account dynamically created and committed in real-time to MySQL!")
-                print(f"  Welcome, {name} (ID: #{result['user_id']})!\n")
                 return result
             else:
-                print(f"\n  [-] {result}\n")
                 return None
 
 
 
 def login():
-    print("\n" + "=" * 46)
-    print("                 LOGIN")
-    print("=" * 46)
-    print("  (Type 'b' or 'back' at any prompt to go back)\n")
-
     step = 1
     login_input = ""
     password = ""
 
     while True:
         if step == 1:
-            raw_input = input("  Email or Name : ").strip()
+            raw_input = input().strip()
             if raw_input.lower() in ("b", "back"):
-                print("\n  Returning to main menu...\n")
                 return None
 
             if not raw_input:
-                print("  [-] Email/Name cannot be empty.\n")
                 continue
 
             login_input = raw_input
             step = 2
 
         elif step == 2:
-            raw_pw = input("  Password      : ").strip()
+            raw_pw = input().strip()
             if raw_pw.lower() in ("b", "back"):
-                print("  <- Going back to Email/Name...\n")
                 step = 1
                 continue
 
             if not raw_pw:
-                print("  [-] Password cannot be empty.\n")
                 continue
 
             password = raw_pw
 
             success, result = authenticate_user(login_input, password)
             if success:
-                print(f"\n  [+] Login successful! Welcome back, {result['name']}!\n")
                 return result
             else:
-                print(f"\n  [-] {result}\n")
                 step = 1
 
 
 
 def save_session(user_id, category, topic_name, speaking_time, audio_path, video_path, transcription, report):
-    session_id = save_speech_session(
+    return save_speech_session(
         user_id=user_id,
         category=category,
         topic_name=topic_name,
@@ -160,123 +133,50 @@ def save_session(user_id, category, topic_name, speaking_time, audio_path, video
         transcription=transcription,
         report=report,
     )
-    if session_id:
-        print(f"  [+] Session #{session_id} and take committed to MySQL in real-time.")
-    return session_id
 
 
 def view_my_sessions(user):
-    print("\n" + "=" * 60)
-    print(f"       SESSION HISTORY FOR {user['name'].upper()} (From MySQL)")
-    print("=" * 60)
-
     rows = get_user_sessions(user["user_id"])
     if not rows:
-        print("\n  No sessions found in MySQL. Start a speech practice to begin!\n")
-        input("  Press ENTER to return to menu...")
         return
 
     for i, row in enumerate(rows, 1):
-        date_str = row["created_at"].strftime("%Y-%m-%d %H:%M") if row.get("created_at") else "N/A"
-        category = row.get("category") or "General"
-        topic = row.get("topic_name") or "Untitled"
-        speaking_time = row.get("speaking_time") or 60
-
-        print(f"\n  Session #{i} (ID: {row['session_id']}) | {date_str}")
-        print(f"  Category      : {category}")
-        print(f"  Topic         : {topic}")
-        print(f"  Speaking Time : {speaking_time} seconds")
-
-        trans = (row.get("transcription") or "").strip()
-        if trans:
-            preview = trans[:100] + ("..." if len(trans) > 100 else "")
-            print(f"  Transcript    : \"{preview}\"")
-
-        report_raw = row.get("report")
-        if report_raw:
-            try:
-                rep_data = json.loads(report_raw) if isinstance(report_raw, str) and report_raw.startswith("{") else None
-                if rep_data and "overall" in rep_data:
-                    print(f"  Overall Score : {rep_data.get('overall')}/10")
-                flaws = rep_data.get("what_went_wrong", []) if rep_data else []
-                if flaws and not (len(flaws) == 1 and flaws[0].startswith("No major")):
-                    print("  What Went Wrong:")
-                    for flaw in flaws[:2]:
-                        print(f"    - {flaw}")
-            except Exception:
-                pass
-
-        print("  " + "-" * 50)
-
-    print()
-    input("  Press ENTER to return to menu...")
-
+        pass
 
 
 def delete_account(user):
-    print("\n" + "=" * 50)
-    print("           PERMANENT ACCOUNT DELETION")
-    print("=" * 50)
-    print("\n  WARNING: This will permanently delete your account,")
-    print("  all past speech sessions, takes, and evaluations from MySQL.")
-    print("  This action CANNOT be undone.\n")
-    print("  (Type 'b' or 'back' at any prompt to cancel)\n")
-
-    confirm_step1 = input("  Are you sure you want to delete your account? (yes/no): ").strip().lower()
+    confirm_step1 = input().strip().lower()
     if confirm_step1 in ("b", "back", "no", "n"):
-        print("\n  Account deletion cancelled. Returning to menu...\n")
         return False
 
     if confirm_step1 not in ("yes", "y"):
-        print("\n  [-] Invalid response. Account deletion cancelled.\n")
         return False
 
-    password = input("  Enter your account password to verify: ").strip()
+    password = input().strip()
     if password.lower() in ("b", "back"):
-        print("\n  Account deletion cancelled. Returning to menu...\n")
         return False
 
     success, _ = authenticate_user(user["email"], password)
     if not success:
-        print("\n  [-] Incorrect password. Account deletion cancelled.\n")
         return False
 
-    print("\n  Final Confirmation:")
-    confirm_step3 = input("  Type 'DELETE' to confirm permanent deletion: ").strip()
+    confirm_step3 = input().strip()
     if confirm_step3 != "DELETE":
-        print("\n  [-] Confirmation mismatch ('DELETE' was not entered). Deletion cancelled.\n")
         return False
 
     success, msg = delete_user(user["user_id"])
-    if success:
-        print(f"\n  [+] Account for '{user['name']}' ({user['email']}) deleted dynamically from MySQL.\n")
-        return True
-    else:
-        print(f"\n  [-] Deletion failed: {msg}\n")
-        return False
+    return bool(success)
 
 
 
 def authenticate():
     try:
         initialize_database()
-    except Exception as e:
-        print(f"\n  [-] Database initialization failed: {e}")
+    except Exception:
         return None
 
     while True:
-        print("\n" + "=" * 46)
-        print("           SPEAKWISE AI — WELCOME")
-        print("=" * 46)
-        print()
-        print("  Do you have an account?")
-        print()
-        print("  1. Yes — Log in")
-        print("  2. No  — Create a new account")
-        print("  3. Exit")
-        print()
-
-        choice = input("  Select option (1-3): ").strip()
+        choice = input().strip()
 
         if choice == "1":
             user = login()
@@ -289,26 +189,12 @@ def authenticate():
                 return user
 
         elif choice in ("3", "exit", "e", "q", "quit"):
-            print("\n  Goodbye!\n")
             return None
-
-        else:
-            print("  [-] Invalid option. Please try again.")
 
 
 def user_menu(user):
     while True:
-        print("\n" + "=" * 46)
-        print(f"  Welcome, {user['name']}!")
-        print("=" * 46)
-        print()
-        print("  1. Start Speech Practice")
-        print("  2. View My Past Sessions")
-        print("  3. Logout")
-        print("  4. Delete Account Permanently")
-        print()
-
-        choice = input("  Select option (1-4): ").strip()
+        choice = input().strip()
 
         if choice == "1":
             return "speech"
@@ -319,5 +205,3 @@ def user_menu(user):
         elif choice == "4":
             if delete_account(user):
                 return "deleted"
-        else:
-            print("  [-] Invalid option. Please try again.")

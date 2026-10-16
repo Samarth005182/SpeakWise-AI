@@ -74,7 +74,6 @@ def record_video(
     using_fallback_camera = False
 
     if cap is None:
-        print("[Video Notice] Physical camera not opened. Running with animated audio-reactive stream.")
         using_fallback_camera = True
         actual_fps = declared_fps
     else:
@@ -86,9 +85,16 @@ def record_video(
 
     out = _create_video_writer(output_path, actual_fps, width, height)
 
+    status["camera_available"] = cap is not None
+    status["video_writer_available"] = out is not None
+    status["video_analysis_eligible"] = cap is not None and out is not None
+    if cap is None:
+        status["video_error"] = "Webcam could not be opened; placeholder frames are not suitable for visual analysis."
+    elif out is None:
+        status["video_error"] = "Could not create a video file with an available codec."
+
     ready_event.set()
     start_event.wait(timeout=5.0)
-    print("Camera recording started...")
 
     frame_count = 0
     frame_interval = 1.0 / max(actual_fps, 20.0)
@@ -155,4 +161,6 @@ def record_video(
 
     timing["video_frames"] = frame_count
     timing["video_actual_fps"] = actual_fps
-    print(f"Camera recording finished! Total frames: {frame_count}")
+    timing["video_real_frames"] = frame_count if not using_fallback_camera else 0
+    status["video_frames"] = frame_count
+    status["video_real_frames"] = frame_count if not using_fallback_camera else 0

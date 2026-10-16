@@ -11,7 +11,6 @@ def record_audio(duration, start_event, ready_event, status, output_path="myreco
         ready_event.set()
 
         start_event.wait()
-        print("Microphone recording started...")
 
         start_time = time.perf_counter()
         recording = sd.rec(
@@ -34,12 +33,9 @@ def record_audio(duration, start_event, ready_event, status, output_path="myreco
         recorded_part = recording[:actual_samples] if actual_samples > 0 else recording
 
         write(output_path, sample_rate, recorded_part)
-        print("\nMicrophone recording finished!")
-        print(f"Audio saved as {output_path}")
 
     except Exception as error:
         status["audio_error"] = str(error)
-        print(f"[Audio Error] {error}. Writing silence fallback.")
         ready_event.set()
         try:
             import numpy as np

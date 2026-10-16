@@ -2443,20 +2443,11 @@ class PCF:
 
 
 def log(name, f):
-    if DEBUG.get_debug():
-        print(f"{name} logged:", f)
-        print()
+    pass
 
 
 def cpp_compare(name, np_matrix):
-    if DEBUG.get_debug():
-        cpp_matrix = np.load(f"{name}_cpp.npy")
-        rows, cols = cpp_matrix.shape
-        cpp_matrix = np.split(np.reshape(cpp_matrix, -1), cols)
-        cpp_matrix = np.stack(cpp_matrix, 1)
-
-        print(f"{name}:", np.sum(np.abs(cpp_matrix - np_matrix[:rows, :cols]) ** 2))
-        print()
+    pass
 
 
 def get_metric_landmarks(screen_landmarks, pcf):
@@ -2603,9 +2594,6 @@ def internal_solve_weighted_orthogonal_problem(sources, targets, sqrt_weights):
 
 
 def compute_optimal_rotation(design_matrix):
-    if np.linalg.norm(design_matrix) < 1e-9:
-        print("Design matrix norm is too small!")
-
     u, _, vh = np.linalg.svd(design_matrix, full_matrices=True)
 
     postrotation = u
@@ -2631,11 +2619,6 @@ def compute_optimal_scale(
 
     numerator = np.sum(rotated_centered_weighted_sources * weighted_targets)
     denominator = np.sum(centered_weighted_sources * weighted_sources)
-
-    if denominator < 1e-9:
-        print("Scale expression denominator is too small!")
-    if numerator / denominator < 1e-9:
-        print("Scale is too small!")
 
     return numerator / denominator
 

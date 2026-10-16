@@ -28,7 +28,6 @@ def _send_with_retry(chat, message):
             )
             if is_transient and attempt < MAX_RETRIES:
                 wait = RETRY_DELAY * attempt
-                print(f"  (Server busy, retrying in {wait}s... attempt {attempt}/{MAX_RETRIES})")
                 time.sleep(wait)
             else:
                 raise
@@ -37,19 +36,12 @@ def _send_with_retry(chat, message):
 def _connect_with_fallback(client, setup_message):
     last_error = None
     for model_name in FALLBACK_MODELS:
-        print(f"  Trying model: {model_name}...")
         try:
             chat = client.chats.create(model=model_name)
             res = _send_with_retry(chat, setup_message)
-            print(f"  Connected to {model_name} [OK]")
             return chat, res
         except Exception as e:
             last_error = e
-            error_str = str(e)
-            if "404" in error_str:
-                print(f"  {model_name} not available, trying next...")
-            else:
-                print(f"  {model_name} failed ({type(e).__name__}), trying next...")
     if last_error is None:
         raise RuntimeError("No models configured in FALLBACK_MODELS.")
     raise RuntimeError(
@@ -84,8 +76,7 @@ class CoachChatSession:
             )
             self.chat, _ = _connect_with_fallback(self.client, setup_prompt)
             self.is_connected = True
-        except Exception as e:
-            print(f"[CoachChatSession Notice] Offline fallback active: {e}")
+        except Exception:
             self.is_connected = False
 
     def send_message(self, message):
@@ -94,8 +85,8 @@ class CoachChatSession:
                 res = _send_with_retry(self.chat, message)
                 if res and res.text:
                     return res.text.strip()
-            except Exception as e:
-                print(f"[CoachChatSession] Live send failed: {e}, using smart fallback")
+            except Exception:
+                pass
 
         msg_lower = message.lower()
         topic = self.topic
@@ -159,12 +150,7 @@ def ai_prepare(topic, time_limit=120, speaking_time=60):
         f"concise and actionable. Start by giving them 3-4 key talking points."
     )
 
-    print(f"AI Coach is ready! Ask questions about \"{topic}\" to prepare ({time_desc} speech).")
-    print(f"You have {time_limit} seconds. Type 'done' to finish early.\n")
-
-    print("Connecting to AI Coach...")
     chat, res = _connect_with_fallback(client, setup_message)
-    print(f"\nAI Coach: {res.text}\n")
 
     time_up = threading.Event()
 
@@ -172,7 +158,6 @@ def ai_prepare(topic, time_limit=120, speaking_time=60):
         time_up.wait(timeout=time_limit)
         if not time_up.is_set():
             time_up.set()
-            print("\n\n⏰ Preparation time is up!\n")
 
     timer_thread = threading.Thread(target=_timer, daemon=True)
     timer_thread.start()
@@ -193,10 +178,8 @@ def ai_prepare(topic, time_limit=120, speaking_time=60):
 
         try:
             res = _send_with_retry(chat, message)
-            print(f"\nAI Coach: {res.text}\n")
-        except Exception as e:
-            print(f"\n[!] Couldn't get a response: {e}")
-            print("Try again or type 'done' to move on.\n")
+        except Exception:
+            pass
 
     time_up.set()
     timer_thread.join(timeout=2)

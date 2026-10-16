@@ -1,7 +1,8 @@
 import os
 from datetime import datetime
 
-RECORDINGS_DIR = "recordings"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+RECORDINGS_DIR = os.path.join(BASE_DIR, "recordings")
 
 
 def generate_recording_paths():

@@ -16,8 +16,7 @@ def get_audio_stats(audio_file):
 
     try:
         audio, sample_rate = librosa.load(audio_file, sr=16000)
-    except Exception as e:
-        print(f"[Audio Analysis Error] {e}")
+    except Exception:
         return {
             "duration": 0.0,
             "mean_rms": 0.0,
@@ -60,6 +59,17 @@ def get_audio_stats(audio_file):
         "speech_ratio": speech_ratio,
         "speech_duration": speech_duration,
     }
+
+
+def get_audio_duration(audio_file):
+    """Return actual decoded audio duration in seconds, or 0 when unavailable."""
+    if not os.path.exists(audio_file):
+        return 0.0
+    try:
+        info = librosa.get_duration(path=audio_file)
+        return float(info) if np.isfinite(info) else 0.0
+    except Exception:
+        return 0.0
 
 
 def is_audio_silent(audio_file):
