@@ -362,20 +362,10 @@ class SpeakWiseApp(ctk.CTk):
         )
 
         self.current_step = 1
+        self._topic_generation_id = 0
         self.selected_category = PRESET_CATEGORIES[0]
         self.selected_duration = DURATION_OPTIONS[2]
-        self.current_topic_data = {
-            "title": "The Impact of Artificial Intelligence on Education",
-            "category": "Technology",
-            "difficulty": "Medium",
-            "description": "Explore how AI is transforming the way we learn, teach and access knowledge. Discuss the benefits, challenges and what the future might look like.",
-            "focus_points": [
-                "Current applications of AI in education",
-                "Benefits and personalized learning opportunities",
-                "Challenges, ethics and academic integrity concerns",
-                "The evolving future role of human educators",
-            ],
-        }
+        self.current_topic_data = self._empty_topic_data()
 
         self._build_app_shell()
 
@@ -444,7 +434,7 @@ class SpeakWiseApp(ctk.CTk):
         self.nav_buttons = {}
         nav_items = [
             ("home", "  🏠  Home"),
-            ("practice", "  🎙️  Practice"),
+            ("practice", "  🎙️ Practice"),
             ("history", "  🕒  History"),
             ("profile", "  👤  Profile"),
             ("settings", "  ⚙️  Settings"),
@@ -630,6 +620,7 @@ class SpeakWiseApp(ctk.CTk):
 
     def start_new_practice_session(self):
         """Start a completely new practice session from Step 1 with a fresh topic."""
+        self._topic_generation_id += 1
         self._cancel_prep_timer()
         if getattr(self, "_audio_is_playing", False):
             try:
@@ -641,27 +632,7 @@ class SpeakWiseApp(ctk.CTk):
         self.current_step = 1
         self.update_stepper(1)
 
-        cat_backend = self.selected_category.get("backend_key")
-        try:
-            cat_name, topic_title = get_random_topic(cat_backend)
-        except Exception:
-            topic_title = "The Evolution of Modern Artificial Intelligence"
-
-        focus_pts = [
-            f"Core foundations and key aspects of {topic_title.lower()}",
-            "Practical examples and real-world relevance",
-            "Perspectives, debates and potential challenges",
-            "Key takeaway message and future outlook",
-        ]
-        desc = f"Examine the core themes and implications of '{topic_title}'. Share your thoughts, real-world examples, and structure a clear, engaging delivery."
-
-        self.current_topic_data = {
-            "title": topic_title,
-            "category": self.selected_category["name"],
-            "difficulty": "Medium",
-            "description": desc,
-            "focus_points": focus_pts,
-        }
+        self.current_topic_data = self._empty_topic_data()
 
         self._build_step1_topic_selection()
         self.show_page("practice")
@@ -833,8 +804,8 @@ class SpeakWiseApp(ctk.CTk):
 
         scroll = ctk.CTkScrollableFrame(self.practice_container, fg_color="transparent")
         scroll.pack(fill="both", expand=True)
-        scroll.grid_columnconfigure(0, weight=6)
-        scroll.grid_columnconfigure(1, weight=4)
+        scroll.grid_columnconfigure(0, weight=6, uniform="topic_columns")
+        scroll.grid_columnconfigure(1, weight=4, uniform="topic_columns")
 
         header_frame = ctk.CTkFrame(scroll, fg_color="transparent")
         header_frame.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 20))
@@ -1134,6 +1105,7 @@ class SpeakWiseApp(ctk.CTk):
             text_color=TEXT_MUTED,
         )
         r_sub.pack(anchor="w")
+        r_sub.configure(text="Generate a topic when you're ready.")
 
         self.btn_gen_another = ctk.CTkButton(
             r_head,
@@ -1148,7 +1120,21 @@ class SpeakWiseApp(ctk.CTk):
             height=34,
             command=self._generate_fresh_topic,
         )
-        self.btn_gen_another.pack(side="right")
+        self.btn_gen_another.pack_forget()
+        self.btn_gen_another.destroy()
+        self.btn_gen_another = ctk.CTkButton(
+            left_col,
+            text="▦   Generate Topic",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=16, weight="bold"),
+            fg_color=ACCENT_BLUE,
+            text_color=TEXT_WHITE,
+            hover_color="#008f77",
+            height=52,
+            corner_radius=12,
+            border_width=0,
+            command=self._generate_fresh_topic,
+        )
+        self.btn_gen_another.pack(fill="x", pady=(0, 12))
 
         self.hero_card = ctk.CTkFrame(
             right_col,
@@ -1248,9 +1234,11 @@ class SpeakWiseApp(ctk.CTk):
             right_col,
             text="Start Preparation  ➔",
             font=ctk.CTkFont(family=FONT_FAMILY, size=16, weight="bold"),
-            fg_color=ACCENT_BLUE,
-            hover_color="#008f77",
+            fg_color=ACCENT_BLUE if self.current_topic_data.get("generated") else "#343438",
+            hover_color="#008f77" if self.current_topic_data.get("generated") else "#343438",
+            text_color=TEXT_WHITE if self.current_topic_data.get("generated") else TEXT_SUBTLE,
             height=50,
+            state="normal" if self.current_topic_data.get("generated") else "disabled",
             corner_radius=12,
             command=self._advance_to_step2_prepare,
         )
@@ -1295,6 +1283,7 @@ class SpeakWiseApp(ctk.CTk):
 
 
     def _on_select_category(self, cat):
+        self._topic_generation_id += 1
         self.selected_category = cat
 
         for c_id, (card, check_lbl) in self.category_card_widgets.items():
@@ -1313,7 +1302,10 @@ class SpeakWiseApp(ctk.CTk):
                 )
                 check_lbl.configure(text="", fg_color="transparent")
 
-        self._generate_fresh_topic()
+        self.current_topic_data = self._empty_topic_data()
+        self._apply_generated_topic_ui()
+        if hasattr(self, "btn_gen_another") and self.btn_gen_another.winfo_exists():
+            self.btn_gen_another.configure(text="▦   Generate Topic", state="normal")
 
     def _on_select_duration(self, dur):
         self.selected_duration = dur
@@ -1337,18 +1329,35 @@ class SpeakWiseApp(ctk.CTk):
         if hasattr(self, "lbl_d_time"):
             self.lbl_d_time.configure(text=dur["display"])
 
+    @staticmethod
+    def _empty_topic_data():
+        return {
+            "title": "Your topic will appear here",
+            "category": "Not generated",
+            "difficulty": "Medium",
+            "description": "Choose a category and click Generate Topic when you're ready.",
+            "focus_points": [],
+            "generated": False,
+        }
+
     def _generate_fresh_topic(self):
         """Asynchronously query Gemini AI topic generator and update right-hand card."""
+        self._topic_generation_id += 1
+        generation_id = self._topic_generation_id
         if hasattr(self, "btn_gen_another") and self.btn_gen_another.winfo_exists():
             self.btn_gen_another.configure(text="⌛ Generating...", state="disabled")
 
         cat_backend = self.selected_category["backend_key"]
+        category_name = self.selected_category["name"]
 
         def _worker():
             try:
                 cat_name, topic_title = get_random_topic(cat_backend)
             except Exception:
                 topic_title = "The Evolution of Modern Artificial Intelligence"
+
+            if generation_id != self._topic_generation_id:
+                return
 
             focus_pts = [
                 f"Core foundations and key aspects of {topic_title.lower()}",
@@ -1361,10 +1370,11 @@ class SpeakWiseApp(ctk.CTk):
 
             self.current_topic_data = {
                 "title": topic_title,
-                "category": self.selected_category["name"],
+                "category": category_name,
                 "difficulty": "Medium",
                 "description": desc,
                 "focus_points": focus_pts,
+                "generated": True,
             }
 
             self.safe_after(0, self._apply_generated_topic_ui)
@@ -1384,6 +1394,14 @@ class SpeakWiseApp(ctk.CTk):
                 self.lbl_d_cat.configure(text=self.current_topic_data["category"])
             if hasattr(self, "lbl_d_time") and self.lbl_d_time.winfo_exists():
                 self.lbl_d_time.configure(text=self.selected_duration["display"])
+            if hasattr(self, "btn_start_prep") and self.btn_start_prep.winfo_exists():
+                generated = self.current_topic_data.get("generated", False)
+                self.btn_start_prep.configure(
+                    state="normal" if generated else "disabled",
+                    fg_color=ACCENT_BLUE if generated else "#343438",
+                    hover_color="#008f77" if generated else "#343438",
+                    text_color=TEXT_WHITE if generated else TEXT_SUBTLE,
+                )
             self._render_focus_points()
 
             if hasattr(self, "btn_gen_another") and self.btn_gen_another.winfo_exists():
@@ -1403,15 +1421,6 @@ class SpeakWiseApp(ctk.CTk):
         self.prep_timer_running = False
         self.prep_timer_after_id = None
 
-        self.prep_goals = [
-            {"text": "Understand the topic and its key aspects", "done": False},
-            {"text": "Identify 3–5 main talking points", "done": False},
-            {"text": "Plan a clear structure (introduction, body, conclusion)", "done": False},
-            {"text": "Gather interesting facts or examples", "done": False},
-            {"text": "Feel confident before you start speaking", "done": False},
-        ]
-        self.prep_goal_widgets = []
-
         self.coach_session = None
 
         for w in self.practice_container.winfo_children():
@@ -1425,6 +1434,14 @@ class SpeakWiseApp(ctk.CTk):
 
         header_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
         header_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 16))
+
+        step_tag = ctk.CTkLabel(
+            header_frame,
+            text="STEP 2 OF 4",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+            text_color=COLOR_CYAN,
+        )
+        step_tag.pack(anchor="w", pady=(0, 2))
 
         btn_back_top = ctk.CTkButton(
             header_frame,
@@ -1442,7 +1459,7 @@ class SpeakWiseApp(ctk.CTk):
         title_lbl = ctk.CTkLabel(
             header_frame,
             text="Prepare with AI",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=30, weight="bold"),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=32, weight="bold"),
             text_color=TEXT_WHITE,
         )
         title_lbl.pack(anchor="w", pady=(0, 2))
@@ -1457,16 +1474,16 @@ class SpeakWiseApp(ctk.CTk):
 
         left_chat_card = ctk.CTkFrame(
             main_frame,
-            fg_color=CARD_BG,
+            fg_color="#19191B",
             corner_radius=16,
             border_width=1,
-            border_color=CARD_BORDER,
+            border_color="#303033",
         )
         left_chat_card.grid(row=1, column=0, sticky="nsew", padx=(0, 14), pady=(0, 10))
         left_chat_card.grid_rowconfigure(1, weight=1)
         left_chat_card.grid_columnconfigure(0, weight=1)
 
-        chat_top = ctk.CTkFrame(left_chat_card, fg_color="#261e21", height=60, corner_radius=14)
+        chat_top = ctk.CTkFrame(left_chat_card, fg_color="#202023", height=60, corner_radius=14)
         chat_top.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 8))
         chat_top.pack_propagate(False)
 
@@ -1600,10 +1617,10 @@ class SpeakWiseApp(ctk.CTk):
 
         timer_card = ctk.CTkFrame(
             right_scroll,
-            fg_color=CARD_BG,
+            fg_color="#142321",
             corner_radius=14,
             border_width=1,
-            border_color=CARD_BORDER,
+            border_color="#087D76",
         )
         timer_card.pack(fill="x", pady=(0, 14))
 
@@ -1629,7 +1646,7 @@ class SpeakWiseApp(ctk.CTk):
         self.lbl_prep_clock = ctk.CTkLabel(
             clock_row,
             text=f"{mins:02d}:{secs:02d}",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=44, weight="bold"),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=48, weight="bold"),
             text_color=TEXT_WHITE,
         )
         self.lbl_prep_clock.pack(side="left")
@@ -1668,10 +1685,10 @@ class SpeakWiseApp(ctk.CTk):
 
         overview_card = ctk.CTkFrame(
             right_scroll,
-            fg_color=CARD_BG,
+            fg_color="#19191B",
             corner_radius=14,
             border_width=1,
-            border_color=CARD_BORDER,
+            border_color="#303033",
         )
         overview_card.pack(fill="x", pady=(0, 14))
 
@@ -1767,61 +1784,12 @@ class SpeakWiseApp(ctk.CTk):
         )
         o_desc.pack(anchor="w")
 
-        goals_card = ctk.CTkFrame(
-            right_scroll,
-            fg_color=CARD_BG,
-            corner_radius=14,
-            border_width=1,
-            border_color=CARD_BORDER,
-        )
-        goals_card.pack(fill="x", pady=(0, 14))
-
-        g_inner = ctk.CTkFrame(goals_card, fg_color="transparent")
-        g_inner.pack(fill="both", expand=True, padx=18, pady=16)
-
-        g_title = ctk.CTkLabel(
-            g_inner,
-            text="🎯  Preparation Goals",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
-            text_color=TEXT_WHITE,
-        )
-        g_title.pack(anchor="w", pady=(0, 10))
-
-        for g_idx, goal in enumerate(self.prep_goals):
-            g_row = ctk.CTkFrame(g_inner, fg_color="transparent", cursor="hand2")
-            g_row.pack(fill="x", pady=4)
-
-            check_circle = ctk.CTkLabel(
-                g_row,
-                text="◯",
-                font=ctk.CTkFont(size=13),
-                text_color=TEXT_SUBTLE,
-                width=20,
-            )
-            check_circle.pack(side="left", padx=(0, 8))
-
-            g_lbl = ctk.CTkLabel(
-                g_row,
-                text=goal["text"],
-                font=ctk.CTkFont(family=FONT_FAMILY, size=12),
-                text_color=TEXT_MUTED,
-                justify="left",
-                wraplength=340,
-                anchor="w",
-            )
-            g_lbl.pack(side="left", fill="x", expand=True)
-
-            for w in (g_row, check_circle, g_lbl):
-                w.bind("<Button-1>", lambda e, idx=g_idx: self._toggle_prep_goal(idx))
-
-            self.prep_goal_widgets.append((check_circle, g_lbl))
-
         tip_card = ctk.CTkFrame(
             right_scroll,
-            fg_color=CARD_BG,
+            fg_color="#19191B",
             corner_radius=12,
             border_width=1,
-            border_color=CARD_BORDER,
+            border_color="#303033",
         )
         tip_card.pack(fill="x", pady=(0, 14))
 
@@ -1856,17 +1824,19 @@ class SpeakWiseApp(ctk.CTk):
         )
         tip_text.pack(anchor="w")
 
-        btn_start_speaking = ctk.CTkButton(
+        self.btn_start_speaking = ctk.CTkButton(
             right_scroll,
             text="Start Speaking Now 🎙️",
             font=ctk.CTkFont(family=FONT_FAMILY, size=15, weight="bold"),
-            fg_color=ACCENT_BLUE,
-            hover_color="#008f77",
-            corner_radius=10,
-            height=48,
+            fg_color="#343438",
+            hover_color="#343438",
+            text_color=TEXT_SUBTLE,
+            corner_radius=26,
+            height=52,
+            state="disabled",
             command=self._advance_to_step3_speak,
         )
-        btn_start_speaking.pack(fill="x", pady=(4, 16))
+        self.btn_start_speaking.pack(fill="x", pady=(4, 16))
 
         self._render_coach_loading()
         self._init_coach_session_async()
@@ -2148,25 +2118,15 @@ class SpeakWiseApp(ctk.CTk):
                 w.destroy()
             self._render_initial_ai_greeting()
 
-    def _toggle_prep_goal(self, idx):
-        """Toggle checklist state for a preparation goal."""
-        if idx >= len(self.prep_goals) or idx >= len(self.prep_goal_widgets):
-            return
-
-        self.prep_goals[idx]["done"] = not self.prep_goals[idx]["done"]
-        is_done = self.prep_goals[idx]["done"]
-        circle_lbl, text_lbl = self.prep_goal_widgets[idx]
-
-        if is_done:
-            circle_lbl.configure(text="✓", text_color=ACCENT_EMERALD)
-            text_lbl.configure(text_color=TEXT_WHITE)
-        else:
-            circle_lbl.configure(text="◯", text_color=TEXT_SUBTLE)
-            text_lbl.configure(text_color=TEXT_MUTED)
-
-
     def _start_prep_timer(self):
         self.prep_timer_running = True
+        if hasattr(self, "btn_start_speaking") and self.btn_start_speaking.winfo_exists():
+            self.btn_start_speaking.configure(
+                state="normal",
+                fg_color=ACCENT_BLUE,
+                hover_color="#008f77",
+                text_color=TEXT_WHITE,
+            )
         self._schedule_prep_tick()
 
     def _schedule_prep_tick(self):
@@ -2451,82 +2411,6 @@ class SpeakWiseApp(ctk.CTk):
         )
         sub_encourage.pack()
 
-        tips_card = ctk.CTkFrame(
-            right_col,
-            fg_color=CARD_BG,
-            corner_radius=16,
-            border_width=1,
-            border_color=CARD_BORDER,
-        )
-        tips_card.pack(fill="x", pady=(0, 14))
-
-        tips_inner = ctk.CTkFrame(tips_card, fg_color="transparent")
-        tips_inner.pack(fill="both", expand=True, padx=18, pady=16)
-
-        tips_h = ctk.CTkLabel(
-            tips_inner,
-            text="💡  Speaking Tips",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
-            text_color=TEXT_WHITE,
-        )
-        tips_h.pack(anchor="w", pady=(0, 10))
-
-        speaking_tips = [
-            "Look naturally at the camera window",
-            "Speak clearly and at a comfortable pace",
-            "Stay on topic",
-            "Avoid too many filler words (um, uh, like)",
-            "Be yourself!",
-        ]
-
-        for tip in speaking_tips:
-            tip_row = ctk.CTkFrame(tips_inner, fg_color="transparent")
-            tip_row.pack(fill="x", pady=3)
-
-            chk = ctk.CTkLabel(
-                tip_row,
-                text="✓",
-                font=ctk.CTkFont(size=11, weight="bold"),
-                fg_color=ACCENT_BLUE,
-                text_color=TEXT_WHITE,
-                width=18,
-                height=18,
-                corner_radius=9,
-            )
-            chk.pack(side="left", padx=(0, 8))
-
-            tl = ctk.CTkLabel(
-                tip_row,
-                text=tip,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=12),
-                text_color=COLOR_ICE,
-                justify="left",
-                wraplength=310,
-                anchor="w",
-            )
-            tl.pack(side="left", fill="x", expand=True)
-
-        quote_card = ctk.CTkFrame(
-            right_col,
-            fg_color="#181315",
-            corner_radius=12,
-            border_width=1,
-            border_color=CARD_BORDER,
-        )
-        quote_card.pack(fill="x", pady=(0, 14))
-
-        q_inner = ctk.CTkFrame(quote_card, fg_color="transparent")
-        q_inner.pack(fill="both", expand=True, padx=14, pady=12)
-
-        q_txt = ctk.CTkLabel(
-            q_inner,
-            text='“It\'s not about being perfect,\nit\'s about making progress.”',
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12, slant="italic"),
-            text_color=COLOR_ICE,
-            justify="center",
-        )
-        q_txt.pack(expand=True)
-
         self.btn_stop_rec = ctk.CTkButton(
             right_col,
             text="⏹   Stop Recording",
@@ -2785,8 +2669,6 @@ class SpeakWiseApp(ctk.CTk):
         for w in container.winfo_children():
             w.destroy()
 
-        self._stop_report_audio()
-
         if rep is None:
             rep = getattr(self, "latest_report_data", None)
 
@@ -2828,10 +2710,14 @@ class SpeakWiseApp(ctk.CTk):
             btn_start.pack()
             return
 
-        scroll = ctk.CTkScrollableFrame(container, fg_color="transparent")
-        scroll.pack(fill="both", expand=True)
-        scroll.grid_columnconfigure(0, weight=1, uniform="report_col")
-        scroll.grid_columnconfigure(1, weight=1, uniform="report_col")
+        report_body = ctk.CTkFrame(container, fg_color="transparent")
+        report_body.pack(fill="both", expand=True, padx=(0, 20), pady=(0, 8))
+        report_body.grid_rowconfigure(0, weight=0)
+        report_body.grid_rowconfigure(1, weight=0)
+        report_body.grid_rowconfigure(2, weight=0)
+        report_body.grid_rowconfigure(3, weight=1)
+        report_body.grid_columnconfigure(0, weight=1, uniform="report_col")
+        report_body.grid_columnconfigure(1, weight=1, uniform="report_col")
 
         topic_title = rep.get("topic") or getattr(self, "current_topic_data", {}).get("title", "Speech Practice")
         category_name = rep.get("category") or getattr(self, "selected_category", {}).get("name", "General")
@@ -2854,17 +2740,12 @@ class SpeakWiseApp(ctk.CTk):
         is_silent = rep.get("is_silent", total_words == 0)
 
         actual_video_path = video_path if video_path is not None else getattr(self, "video_path", None)
-        actual_audio_path = audio_path if audio_path is not None else getattr(self, "audio_path", None)
 
         if not session_date:
             session_date = getattr(self, "latest_session_date", time.strftime("%d %b %Y, %I:%M %p"))
 
-        final_transcript = transcription if transcription is not None else rep.get("transcription", "")
-        if final_transcript is None:
-            final_transcript = ""
-
-        top_header = ctk.CTkFrame(scroll, fg_color="transparent")
-        top_header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 16))
+        top_header = ctk.CTkFrame(report_body, fg_color="transparent")
+        top_header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
 
         h_left = ctk.CTkFrame(top_header, fg_color="transparent")
         h_left.pack(side="left")
@@ -2971,15 +2852,15 @@ class SpeakWiseApp(ctk.CTk):
         )
         btn_end_sess_top.pack(side="left")
 
-        metrics_row = ctk.CTkFrame(scroll, fg_color="transparent")
-        metrics_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 16))
+        metrics_row = ctk.CTkFrame(report_body, fg_color="transparent")
+        metrics_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 12))
         for i in range(4):
             metrics_row.grid_columnconfigure(i, weight=1, uniform="m_card")
 
         c1 = ctk.CTkFrame(metrics_row, fg_color=CARD_BG, corner_radius=14, border_width=1, border_color=CARD_BORDER)
         c1.grid(row=0, column=0, padx=(0, 8), sticky="nsew")
         c1_in = ctk.CTkFrame(c1, fg_color="transparent")
-        c1_in.pack(fill="both", expand=True, padx=14, pady=12)
+        c1_in.pack(fill="both", expand=True, padx=14, pady=10)
 
         icon1 = ctk.CTkLabel(c1_in, text="📄", font=ctk.CTkFont(size=18), width=34, height=34, corner_radius=10, fg_color="#2b2326")
         icon1.pack(side="left", padx=(0, 10))
@@ -2997,7 +2878,7 @@ class SpeakWiseApp(ctk.CTk):
         c2 = ctk.CTkFrame(metrics_row, fg_color=CARD_BG, corner_radius=14, border_width=1, border_color=CARD_BORDER)
         c2.grid(row=0, column=1, padx=4, sticky="nsew")
         c2_in = ctk.CTkFrame(c2, fg_color="transparent")
-        c2_in.pack(fill="both", expand=True, padx=14, pady=12)
+        c2_in.pack(fill="both", expand=True, padx=14, pady=10)
 
         icon2 = ctk.CTkLabel(c2_in, text="⏱️", font=ctk.CTkFont(size=18), width=34, height=34, corner_radius=10, fg_color="#2b2326")
         icon2.pack(side="left", padx=(0, 10))
@@ -3019,7 +2900,7 @@ class SpeakWiseApp(ctk.CTk):
         c3 = ctk.CTkFrame(metrics_row, fg_color=CARD_BG, corner_radius=14, border_width=1, border_color=CARD_BORDER)
         c3.grid(row=0, column=2, padx=4, sticky="nsew")
         c3_in = ctk.CTkFrame(c3, fg_color="transparent")
-        c3_in.pack(fill="both", expand=True, padx=14, pady=12)
+        c3_in.pack(fill="both", expand=True, padx=14, pady=10)
 
         icon3 = ctk.CTkLabel(c3_in, text="👁️", font=ctk.CTkFont(size=18), width=34, height=34, corner_radius=10, fg_color="#172825")
         icon3.pack(side="left", padx=(0, 10))
@@ -3037,7 +2918,7 @@ class SpeakWiseApp(ctk.CTk):
         c4 = ctk.CTkFrame(metrics_row, fg_color=CARD_BG, corner_radius=14, border_width=1, border_color=CARD_BORDER)
         c4.grid(row=0, column=3, padx=(8, 0), sticky="nsew")
         c4_in = ctk.CTkFrame(c4, fg_color="transparent")
-        c4_in.pack(fill="both", expand=True, padx=14, pady=12)
+        c4_in.pack(fill="both", expand=True, padx=14, pady=10)
 
         icon4 = ctk.CTkLabel(c4_in, text="🏆", font=ctk.CTkFont(size=18), width=34, height=34, corner_radius=10, fg_color="#2b2326")
         icon4.pack(side="left", padx=(0, 10))
@@ -3061,15 +2942,15 @@ class SpeakWiseApp(ctk.CTk):
         cs4 = ctk.CTkLabel(c4_text, text=rating_msg, font=ctk.CTkFont(family=FONT_FAMILY, size=10, weight="bold"), text_color=rating_color)
         cs4.pack(anchor="w")
 
-        row_3 = ctk.CTkFrame(scroll, fg_color="transparent")
-        row_3.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 16))
+        row_3 = ctk.CTkFrame(report_body, fg_color="transparent")
+        row_3.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 12))
         for c_idx in range(3):
             row_3.grid_columnconfigure(c_idx, weight=1, uniform="sub3")
 
         mc1 = ctk.CTkFrame(row_3, fg_color=CARD_BG, corner_radius=14, border_width=1, border_color=CARD_BORDER)
         mc1.grid(row=0, column=0, padx=(0, 6), sticky="nsew")
         mc1_in = ctk.CTkFrame(mc1, fg_color="transparent")
-        mc1_in.pack(fill="both", expand=True, padx=14, pady=14)
+        mc1_in.pack(fill="both", expand=True, padx=14, pady=10)
 
         mc1_h = ctk.CTkLabel(mc1_in, text="🗣️  Speaking Pace", font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"), text_color=TEXT_WHITE)
         mc1_h.pack(anchor="w", pady=(0, 4))
@@ -3106,7 +2987,7 @@ class SpeakWiseApp(ctk.CTk):
         mc2 = ctk.CTkFrame(row_3, fg_color=CARD_BG, corner_radius=14, border_width=1, border_color=CARD_BORDER)
         mc2.grid(row=0, column=1, padx=4, sticky="nsew")
         mc2_in = ctk.CTkFrame(mc2, fg_color="transparent")
-        mc2_in.pack(fill="both", expand=True, padx=14, pady=14)
+        mc2_in.pack(fill="both", expand=True, padx=14, pady=10)
 
         mc2_h = ctk.CTkLabel(mc2_in, text="💬  Filler Words", font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"), text_color=TEXT_WHITE)
         mc2_h.pack(anchor="w", pady=(0, 4))
@@ -3138,7 +3019,7 @@ class SpeakWiseApp(ctk.CTk):
         mc3 = ctk.CTkFrame(row_3, fg_color=CARD_BG, corner_radius=14, border_width=1, border_color=CARD_BORDER)
         mc3.grid(row=0, column=2, padx=(6, 0), sticky="nsew")
         mc3_in = ctk.CTkFrame(mc3, fg_color="transparent")
-        mc3_in.pack(fill="both", expand=True, padx=14, pady=14)
+        mc3_in.pack(fill="both", expand=True, padx=14, pady=10)
 
         mc3_h = ctk.CTkLabel(mc3_in, text="⏸️  Pauses & Rhythm", font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"), text_color=TEXT_WHITE)
         mc3_h.pack(anchor="w", pady=(0, 4))
@@ -3152,118 +3033,14 @@ class SpeakWiseApp(ctk.CTk):
         mc3_badge = ctk.CTkLabel(mc3_in, text=p_badge_txt, font=ctk.CTkFont(size=10, weight="bold"), fg_color="#1c1719", text_color=COLOR_ICE, corner_radius=6)
         mc3_badge.pack()
 
-        left_col = ctk.CTkFrame(scroll, fg_color="transparent")
+        left_col = ctk.CTkFrame(report_body, fg_color="transparent")
         left_col.grid(row=3, column=0, sticky="nsew", padx=(0, 8))
-
-        tr_card = ctk.CTkFrame(left_col, fg_color=CARD_BG, corner_radius=16, border_width=1, border_color=CARD_BORDER)
-        tr_card.pack(fill="x", pady=(0, 14))
-
-        tr_in = ctk.CTkFrame(tr_card, fg_color="transparent")
-        tr_in.pack(fill="both", expand=True, padx=18, pady=16)
-
-        tr_top = ctk.CTkFrame(tr_in, fg_color="transparent")
-        tr_top.pack(fill="x", pady=(0, 8))
-
-        tr_title = ctk.CTkLabel(
-            tr_top,
-            text="🎙️  Speech Transcript & Audio Review",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
-            text_color=TEXT_WHITE,
-        )
-        tr_title.pack(side="left")
-
-        w_count_tag = ctk.CTkLabel(
-            tr_top,
-            text=f" {total_words} words ",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
-            fg_color="#172825",
-            text_color=COLOR_CYAN,
-            corner_radius=6,
-        )
-        w_count_tag.pack(side="right")
-
-        audio_bar = ctk.CTkFrame(tr_in, fg_color="#1c1719", corner_radius=10, border_width=1, border_color=CARD_BORDER)
-        audio_bar.pack(fill="x", pady=(0, 12))
-
-        ab_inner = ctk.CTkFrame(audio_bar, fg_color="transparent")
-        ab_inner.pack(fill="x", padx=12, pady=8)
-
-        self.btn_audio_play = ctk.CTkButton(
-            ab_inner,
-            text="▶  Play Recording",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
-            fg_color=ACCENT_BLUE,
-            hover_color="#008f77",
-            height=30,
-            width=120,
-            corner_radius=6,
-            command=lambda: self._toggle_report_audio(actual_audio_path),
-        )
-        self.btn_audio_play.pack(side="left", padx=(0, 12))
-
-        self.report_waveform_cv = tk.Canvas(ab_inner, width=280, height=28, bg="#1c1719", highlightthickness=0)
-        self.report_waveform_cv.pack(side="left", fill="x", expand=True)
-        self._draw_waveform(self.report_waveform_cv, 0.0)
-
-        self.audio_status_lbl = ctk.CTkLabel(
-            ab_inner,
-            text=f"{spk_time_sec}s",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11),
-            text_color=TEXT_MUTED,
-            width=40,
-        )
-        self.audio_status_lbl.pack(side="right", padx=(8, 0))
-
-        if analysis_unavailable:
-            no_speech_box = ctk.CTkFrame(tr_in, fg_color="#2b141a", corner_radius=8, border_width=1, border_color=COLOR_RUBY)
-            no_speech_box.pack(fill="x", pady=(0, 4))
-            detail = rep.get("transcription_error") or "Audio could not be analyzed. Check the microphone recording and model setup."
-            ns_lbl = ctk.CTkLabel(
-                no_speech_box,
-                text=f"⚠️ Speech analysis unavailable.\n{detail}",
-                font=ctk.CTkFont(family=FONT_FAMILY, size=12),
-                text_color=COLOR_RUBY,
-                justify="left",
-                padx=14,
-                pady=12,
-                wraplength=460,
-            )
-            ns_lbl.pack(anchor="w")
-        elif is_silent:
-            no_speech_box = ctk.CTkFrame(tr_in, fg_color="#2b141a", corner_radius=8, border_width=1, border_color=COLOR_RUBY)
-            no_speech_box.pack(fill="x", pady=(0, 4))
-            ns_lbl = ctk.CTkLabel(
-                no_speech_box,
-                text="⚠️ No audible speech was captured in this recording.\n"
-                     "Make sure your microphone is active and positioned near you for the next practice session.",
-                font=ctk.CTkFont(family=FONT_FAMILY, size=12),
-                text_color=COLOR_RUBY,
-                justify="left",
-                padx=14,
-                pady=12,
-            )
-            ns_lbl.pack(anchor="w")
-        else:
-            txt_box = ctk.CTkTextbox(
-                tr_in,
-                height=110,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=12),
-                fg_color="#181315",
-                border_width=1,
-                border_color=CARD_BORDER,
-                text_color=COLOR_ICE,
-                wrap="word",
-                corner_radius=8,
-            )
-            txt_box.pack(fill="x", pady=(0, 4))
-            txt_box.insert("1.0", final_transcript)
-            txt_box.configure(state="disabled")
 
         flaws_card = ctk.CTkFrame(left_col, fg_color=CARD_BG, corner_radius=16, border_width=1, border_color=CARD_BORDER)
         flaws_card.pack(fill="x", pady=(0, 14))
 
         fl_inner = ctk.CTkFrame(flaws_card, fg_color="transparent")
-        fl_inner.pack(fill="both", expand=True, padx=18, pady=16)
+        fl_inner.pack(fill="both", expand=True, padx=18, pady=12)
 
         fl_head = ctk.CTkLabel(fl_inner, text="🔍  Diagnostic Analysis (What Went Wrong)", font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"), text_color=COLOR_RUBY)
         fl_head.pack(anchor="w", pady=(0, 8))
@@ -3291,7 +3068,7 @@ class SpeakWiseApp(ctk.CTk):
         adv_card.pack(fill="x", pady=(0, 14))
 
         adv_inner = ctk.CTkFrame(adv_card, fg_color="transparent")
-        adv_inner.pack(fill="both", expand=True, padx=18, pady=16)
+        adv_inner.pack(fill="both", expand=True, padx=18, pady=12)
 
         adv_head = ctk.CTkLabel(adv_inner, text="💡  Actionable Advice for Next Take", font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"), text_color=COLOR_CYAN)
         adv_head.pack(anchor="w", pady=(0, 8))
@@ -3314,7 +3091,7 @@ class SpeakWiseApp(ctk.CTk):
         drill_card.pack(fill="x", pady=(0, 14))
 
         dr_inner = ctk.CTkFrame(drill_card, fg_color="transparent")
-        dr_inner.pack(fill="both", expand=True, padx=18, pady=16)
+        dr_inner.pack(fill="both", expand=True, padx=18, pady=12)
 
         dr_head = ctk.CTkLabel(dr_inner, text="🚀  Recommended Next Drill", font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"), text_color=COLOR_RUBY if is_silent else COLOR_CYAN)
         dr_head.pack(anchor="w", pady=(0, 6))
@@ -3330,14 +3107,14 @@ class SpeakWiseApp(ctk.CTk):
         dr_desc = ctk.CTkLabel(dr_inner, text=drill_text, font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=COLOR_ICE, justify="left", wraplength=420)
         dr_desc.pack(anchor="w")
 
-        right_col = ctk.CTkFrame(scroll, fg_color="transparent")
+        right_col = ctk.CTkFrame(report_body, fg_color="transparent")
         right_col.grid(row=3, column=1, sticky="nsew", padx=(8, 0))
 
         det_card = ctk.CTkFrame(right_col, fg_color=CARD_BG, corner_radius=16, border_width=1, border_color=CARD_BORDER)
         det_card.pack(fill="x", pady=(0, 14))
 
         d_inner = ctk.CTkFrame(det_card, fg_color="transparent")
-        d_inner.pack(fill="both", expand=True, padx=18, pady=16)
+        d_inner.pack(fill="both", expand=True, padx=18, pady=12)
 
         d_head = ctk.CTkLabel(d_inner, text="🏆  Detailed Score Breakdown", font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"), text_color=TEXT_WHITE)
         d_head.pack(anchor="w", pady=(0, 10))
@@ -3374,148 +3151,7 @@ class SpeakWiseApp(ctk.CTk):
             dl = ctk.CTkLabel(s_row, text=desc, font=ctk.CTkFont(family=FONT_FAMILY, size=10), text_color=TEXT_SUBTLE, justify="left", wraplength=320, anchor="w")
             dl.pack(anchor="w", padx=(22, 0), pady=(1, 0))
 
-        bench_card = ctk.CTkFrame(right_col, fg_color=CARD_BG, corner_radius=16, border_width=1, border_color=CARD_BORDER)
-        bench_card.pack(fill="x", pady=(0, 14))
 
-        b_inner = ctk.CTkFrame(bench_card, fg_color="transparent")
-        b_inner.pack(fill="both", expand=True, padx=18, pady=16)
-
-        b_head = ctk.CTkLabel(b_inner, text="🎯  AI Delivery Benchmarks & Targets", font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"), text_color=COLOR_CYAN)
-        b_head.pack(anchor="w", pady=(0, 8))
-
-        benchmarks = [
-            ("🗣️", "Target Speaking Rate", "120 – 160 WPM", f"{pace_wpm} WPM", COLOR_CYAN if 120 <= pace_wpm <= 160 else COLOR_RUBY if is_silent or pace_wpm < 80 else COLOR_ICE),
-            ("💬", "Filler Word Ratio", "< 3% spoken words", f"{filler_pct:.1f}%", COLOR_CYAN if filler_pct <= 3.0 else COLOR_RUBY),
-            ("👁️", "Gaze & Camera Contact", "> 70% direct gaze", f"{eye_pct:.0f}%", COLOR_CYAN if eye_pct >= 70.0 else COLOR_RUBY if eye_pct < 40.0 else COLOR_ICE),
-            ("👤", "Head Centering Stability", "> 75% steady frame", f"{head_pct:.0f}%", COLOR_CYAN if head_pct >= 75.0 else COLOR_RUBY if head_pct < 50.0 else COLOR_ICE),
-        ]
-
-        for b_icon, b_title, b_target, b_current, b_status_color in benchmarks:
-            b_row = ctk.CTkFrame(b_inner, fg_color="transparent")
-            b_row.pack(fill="x", pady=3)
-
-            b_lbl_left = ctk.CTkLabel(b_row, text=f"{b_icon}  {b_title}", font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"), text_color=TEXT_WHITE)
-            b_lbl_left.pack(side="left")
-
-            b_lbl_right = ctk.CTkLabel(
-                b_row,
-                text=f"{b_current} (Goal: {b_target})",
-                font=ctk.CTkFont(family=FONT_FAMILY, size=10),
-                text_color=b_status_color,
-            )
-            b_lbl_right.pack(side="right")
-
-        btn_pdf = ctk.CTkButton(
-            right_col,
-            text="📥  Export Speech Summary",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
-            fg_color="#221c1e",
-            hover_color=CARD_HOVER,
-            border_width=1,
-            border_color=CARD_BORDER,
-            text_color=COLOR_ICE,
-            corner_radius=10,
-            height=46,
-            command=lambda: messagebox.showinfo(
-                "Export Summary",
-                f"Speech Report for '{topic_title}' exported successfully!\n\n"
-                f"• Overall Score: {overall_val:.1f}/10\n"
-                f"• Words Spoken: {total_words}\n"
-                f"• Speaking Pace: {pace_wpm} WPM\n"
-                f"• Fillers Detected: {total_fillers}"
-            ),
-        )
-        btn_pdf.pack(fill="x", pady=(4, 16))
-
-
-    def _stop_report_audio(self):
-        """Safely stop any ongoing report audio playback."""
-        if getattr(self, "_audio_is_playing", False):
-            try:
-                winsound.PlaySound(None, winsound.SND_PURGE)
-            except Exception:
-                pass
-            self._audio_is_playing = False
-
-        if hasattr(self, "_audio_play_timer") and self._audio_play_timer:
-            try:
-                self.after_cancel(self._audio_play_timer)
-            except Exception:
-                pass
-            self._audio_play_timer = None
-
-        if hasattr(self, "btn_audio_play") and self.btn_audio_play.winfo_exists():
-            try:
-                self.btn_audio_play.configure(text="▶  Play Recording", fg_color=ACCENT_BLUE)
-            except Exception:
-                pass
-
-        if hasattr(self, "report_waveform_cv") and self.report_waveform_cv.winfo_exists():
-            try:
-                self._draw_waveform(self.report_waveform_cv, 0.0)
-            except Exception:
-                pass
-
-    def _toggle_report_audio(self, audio_path):
-        """Toggle playback of recorded session audio."""
-        if getattr(self, "_audio_is_playing", False):
-            self._stop_report_audio()
-            return
-
-        if not audio_path or not os.path.exists(audio_path):
-            messagebox.showwarning("Audio Notice", "No audio recording file found for this session.")
-            return
-
-        try:
-            self._audio_is_playing = True
-            if hasattr(self, "btn_audio_play") and self.btn_audio_play.winfo_exists():
-                self.btn_audio_play.configure(text="⏹  Stop Audio", fg_color=COLOR_RUBY)
-
-            winsound.PlaySound(audio_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-
-            start_time = time.perf_counter()
-            approx_duration = max(5.0, getattr(self, "latest_report_data", {}).get("duration", 30))
-
-            def _update_progress():
-                if not getattr(self, "_audio_is_playing", False):
-                    return
-                elapsed = time.perf_counter() - start_time
-                ratio = min(1.0, elapsed / approx_duration)
-                if hasattr(self, "report_waveform_cv") and self.report_waveform_cv.winfo_exists():
-                    self._draw_waveform(self.report_waveform_cv, ratio)
-                if hasattr(self, "audio_status_lbl") and self.audio_status_lbl.winfo_exists():
-                    self.audio_status_lbl.configure(text=f"{int(elapsed)}s")
-
-                if ratio < 1.0:
-                    self._audio_play_timer = self.after(100, _update_progress)
-                else:
-                    self._stop_report_audio()
-
-            self._audio_play_timer = self.after(100, _update_progress)
-
-        except Exception:
-            self._stop_report_audio()
-
-    def _draw_waveform(self, canvas, progress_ratio=0.0):
-        """Draw realistic audio waveform visualization bars with playing progress highlight."""
-        try:
-            canvas.delete("all")
-            bars = [8, 12, 16, 22, 14, 18, 26, 20, 15, 24, 28, 18, 14, 22, 25, 20, 16, 24, 19, 12, 16, 22, 27, 21, 15, 18, 24, 20, 14, 10, 16, 22, 18, 12, 8]
-            x_start = 8
-            spacing = 8
-            total_bars = len(bars)
-            played_bars = int(total_bars * max(0.0, min(1.0, progress_ratio)))
-            for idx, h in enumerate(bars):
-                x = x_start + idx * spacing
-                y0 = 14 - (h / 2)
-                y1 = 14 + (h / 2)
-                if progress_ratio > 0:
-                    color = COLOR_CYAN if idx <= played_bars else "#352b2e"
-                else:
-                    color = COLOR_CYAN if idx < len(bars) // 2 else COLOR_TEAL
-                canvas.create_line(x, y0, x, y1, fill=color, width=3, capstyle="round")
-        except Exception:
-            pass
 
     def _draw_pace_gauge(self, canvas, wpm):
         """Draw semi-circle speedometer gauge for speaking pace."""
@@ -3578,25 +3214,20 @@ class SpeakWiseApp(ctk.CTk):
 
 
     def _create_home_view(self):
-        """Construct Home page with a looping video background and foreground content."""
+        """Construct the dashboard-style home landing page."""
         self.home_scroll = ctk.CTkFrame(self.pages_container, fg_color=BG_DARK, corner_radius=0)
         self.home_scroll.grid_rowconfigure(0, weight=1)
         self.home_scroll.grid_columnconfigure(0, weight=1)
 
-        self.home_video_label = ctk.CTkLabel(
+        self.home_container = ctk.CTkScrollableFrame(
             self.home_scroll,
-            text="",
             fg_color=BG_DARK,
             corner_radius=0,
+            scrollbar_button_color="#38383B",
+            scrollbar_button_hover_color=COLOR_CYAN,
         )
-        self.home_video_label.place(x=0, y=0, relwidth=1, relheight=1)
-
-        self.home_container = ctk.CTkFrame(
-            self.home_scroll,
-            fg_color="transparent",
-            corner_radius=0,
-        )
-        self.home_container.place(x=0, y=0, relwidth=1, relheight=1)
+        self.home_container.grid(row=0, column=0, sticky="nsew")
+        self.home_container.grid_columnconfigure(0, weight=1)
 
         self._render_home_content()
         return self.home_scroll
@@ -3610,15 +3241,15 @@ class SpeakWiseApp(ctk.CTk):
             w.destroy()
 
         bottom_box = ctk.CTkFrame(self.home_container, fg_color="transparent")
-        bottom_box.pack(side="bottom", fill="x", pady=(18, 6))
+        bottom_box.pack(side="bottom", fill="x", pady=(20, 10))
 
         feat_label = ctk.CTkLabel(
             bottom_box,
             text="✨  Core Capabilities",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=16, weight="bold"),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=19, weight="bold"),
             text_color=TEXT_WHITE,
         )
-        feat_label.pack(anchor="w", pady=(0, 10))
+        feat_label.pack(anchor="w", pady=(0, 14))
 
         feat_row = ctk.CTkFrame(bottom_box, fg_color="transparent")
         feat_row.pack(fill="x")
@@ -3632,26 +3263,26 @@ class SpeakWiseApp(ctk.CTk):
         ]
 
         for idx, (f_icon, f_title, f_desc) in enumerate(features):
-            fc = ctk.CTkFrame(feat_row, fg_color=CARD_BG, corner_radius=14, border_width=1, border_color=CARD_BORDER)
+            fc = ctk.CTkFrame(feat_row, fg_color="#19191B", corner_radius=14, border_width=1, border_color="#303033")
             fc.grid(row=0, column=idx, padx=(0 if idx == 0 else 8, 0 if idx == 2 else 8), sticky="nsew")
 
             fc_inner = ctk.CTkFrame(fc, fg_color="transparent")
-            fc_inner.pack(fill="both", expand=True, padx=18, pady=16)
+            fc_inner.pack(fill="both", expand=True, padx=20, pady=18)
 
-            ic = ctk.CTkLabel(fc_inner, text=f_icon, font=ctk.CTkFont(size=26))
+            ic = ctk.CTkLabel(fc_inner, text=f_icon, width=42, height=42, corner_radius=10, fg_color="#29292C", text_color=COLOR_CYAN, font=ctk.CTkFont(size=23, weight="bold"))
             ic.pack(anchor="w", pady=(0, 8))
 
-            t = ctk.CTkLabel(fc_inner, text=f_title, font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"), text_color=TEXT_WHITE)
+            t = ctk.CTkLabel(fc_inner, text=f_title, font=ctk.CTkFont(family=FONT_FAMILY, size=16, weight="bold"), text_color=TEXT_WHITE)
             t.pack(anchor="w", pady=(0, 4))
 
-            d = ctk.CTkLabel(fc_inner, text=f_desc, font=ctk.CTkFont(family=FONT_FAMILY, size=12), text_color=TEXT_MUTED, justify="left", wraplength=270)
+            d = ctk.CTkLabel(fc_inner, text=f_desc, font=ctk.CTkFont(family=FONT_FAMILY, size=13), text_color=TEXT_ICE, justify="left", wraplength=340)
             d.pack(anchor="w")
 
         top_box = ctk.CTkFrame(self.home_container, fg_color="transparent")
-        top_box.pack(side="top", fill="both", expand=True)
+        top_box.pack(side="top", fill="x")
 
         badge_row = ctk.CTkFrame(top_box, fg_color="transparent")
-        badge_row.pack(anchor="w", pady=(0, 10))
+        badge_row.pack(anchor="w", pady=(2, 18))
 
         badge = ctk.CTkLabel(
             badge_row,
@@ -3675,26 +3306,27 @@ class SpeakWiseApp(ctk.CTk):
         )
         status_badge.pack(side="left")
 
-        hero = ctk.CTkLabel(
-            top_box,
-            text="Speak Better.\nThink Faster.\nCommunicate with Confidence.",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=38, weight="bold"),
-            text_color=TEXT_WHITE,
-            justify="left",
-            anchor="w",
-        )
-        hero.pack(anchor="w", pady=(0, 8))
+        hero = ctk.CTkFrame(top_box, fg_color="transparent")
+        hero.pack(anchor="w", pady=(0, 4))
+        ctk.CTkLabel(
+            hero, text="SpeakWise", text_color=TEXT_WHITE,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=76, weight="bold"),
+        ).pack(side="left")
+        ctk.CTkLabel(
+            hero, text=" AI", text_color=COLOR_CYAN,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=76, weight="bold"),
+        ).pack(side="left")
 
         sub = ctk.CTkLabel(
             top_box,
             text="Master extempore speaking with instant AI coaching, live video analysis, and deep multimodal feedback on body language, pacing, and clarity.",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=14),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=16),
             text_color=TEXT_MUTED,
             justify="left",
-            wraplength=820,
+            wraplength=1050,
             anchor="w",
         )
-        sub.pack(anchor="w", pady=(0, 16))
+        sub.pack(anchor="w", pady=(0, 18))
 
         chips_row = ctk.CTkFrame(top_box, fg_color="transparent")
         chips_row.pack(anchor="w", pady=(0, 18))
@@ -3706,7 +3338,7 @@ class SpeakWiseApp(ctk.CTk):
             ("⚡", "WPM & Filler Detection"),
         ]
         for c_icon, c_text in chips:
-            chip_f = ctk.CTkFrame(chips_row, fg_color=CARD_BG, corner_radius=8, border_width=1, border_color=CARD_BORDER)
+            chip_f = ctk.CTkFrame(chips_row, fg_color="#1B1B1D", corner_radius=13, border_width=1, border_color="#303033")
             chip_f.pack(side="left", padx=(0, 10))
             c_lbl = ctk.CTkLabel(
                 chip_f,
@@ -3714,25 +3346,25 @@ class SpeakWiseApp(ctk.CTk):
                 font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
                 text_color=COLOR_ICE,
             )
-            c_lbl.pack(padx=10, pady=4)
+            c_lbl.pack(padx=14, pady=8)
 
         action_card = ctk.CTkFrame(
             top_box,
-            fg_color=CARD_BG,
+            fg_color="#142321",
             corner_radius=18,
             border_width=1,
-            border_color=CARD_BORDER,
+            border_color="#087D76",
         )
         action_card.pack(fill="x", pady=(0, 18))
 
         ac_inner = ctk.CTkFrame(action_card, fg_color="transparent")
-        ac_inner.pack(fill="both", expand=True, padx=22, pady=20)
+        ac_inner.pack(fill="both", expand=True, padx=24, pady=22)
 
         if not self.current_user:
             g_head = ctk.CTkLabel(
                 ac_inner,
                 text="🚀  Get Started with Your Speaking Journey",
-                font=ctk.CTkFont(family=FONT_FAMILY, size=18, weight="bold"),
+                font=ctk.CTkFont(family=FONT_FAMILY, size=24, weight="bold"),
                 text_color=TEXT_WHITE,
             )
             g_head.pack(anchor="w", pady=(0, 4))
@@ -3740,7 +3372,7 @@ class SpeakWiseApp(ctk.CTk):
             g_desc = ctk.CTkLabel(
                 ac_inner,
                 text="Sign in to your account or create a new one to save your speech recordings, track metrics over time, and unlock full reports.",
-                font=ctk.CTkFont(family=FONT_FAMILY, size=13),
+                font=ctk.CTkFont(family=FONT_FAMILY, size=14),
                 text_color=TEXT_MUTED,
             )
             g_desc.pack(anchor="w", pady=(0, 16))
@@ -3754,8 +3386,8 @@ class SpeakWiseApp(ctk.CTk):
                 font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
                 fg_color=ACCENT_BLUE,
                 hover_color="#008f77",
-                height=44,
-                corner_radius=10,
+                height=52,
+                corner_radius=26,
                 command=lambda: self.open_auth_modal("login"),
             )
             btn_signin.pack(side="left", padx=(0, 12))
@@ -3767,8 +3399,8 @@ class SpeakWiseApp(ctk.CTk):
                 fg_color=COLOR_CYAN,
                 text_color="#191516",
                 hover_color="#00d4c9",
-                height=44,
-                corner_radius=10,
+                height=52,
+                corner_radius=26,
                 command=lambda: self.open_auth_modal("register"),
             )
             btn_signup.pack(side="left", padx=(0, 12))
@@ -3782,8 +3414,8 @@ class SpeakWiseApp(ctk.CTk):
                 border_width=1,
                 border_color=CARD_BORDER,
                 text_color=COLOR_ICE,
-                height=44,
-                corner_radius=10,
+                height=52,
+                corner_radius=26,
                 command=self.start_new_practice_session,
             )
             btn_guest.pack(side="left")
@@ -4057,6 +3689,95 @@ class SpeakWiseApp(ctk.CTk):
 
         return sessions
 
+    def _render_history_empty_state(self):
+        """Show a calm, centered prompt when no saved sessions are available."""
+        header = ctk.CTkFrame(self.history_main_scroll, fg_color="transparent")
+        header.pack(fill="x", pady=(0, 18))
+
+        title_row = ctk.CTkFrame(header, fg_color="transparent")
+        title_row.pack(anchor="w")
+
+        icon = ctk.CTkLabel(
+            title_row,
+            text="◷",
+            width=46,
+            height=46,
+            corner_radius=23,
+            fg_color="#142321",
+            text_color=COLOR_CYAN,
+            font=ctk.CTkFont(size=24, weight="bold"),
+        )
+        icon.pack(side="left", padx=(0, 12))
+
+        title = ctk.CTkLabel(
+            title_row,
+            text="History",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=30, weight="bold"),
+            text_color=TEXT_WHITE,
+        )
+        title.pack(side="left")
+
+        subtitle = ctk.CTkLabel(
+            header,
+            text="Your past practice sessions, performance and progress — all in one place.",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13),
+            text_color=TEXT_MUTED,
+        )
+        subtitle.pack(anchor="w", pady=(6, 0))
+
+        empty_card = ctk.CTkFrame(
+            self.history_main_scroll,
+            fg_color="#1D191B",
+            corner_radius=16,
+            border_width=1,
+            border_color="#352B2E",
+            height=286,
+        )
+        empty_card.pack(fill="x", pady=(0, 16))
+        empty_card.pack_propagate(False)
+
+        content = ctk.CTkFrame(empty_card, fg_color="transparent")
+        content.pack(expand=True)
+
+        clock = ctk.CTkLabel(
+            content,
+            text="◷",
+            font=ctk.CTkFont(size=42, weight="bold"),
+            text_color=TEXT_ICE,
+        )
+        clock.pack(pady=(0, 10))
+
+        heading = ctk.CTkLabel(
+            content,
+            text="No Practice Sessions Yet",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=18, weight="bold"),
+            text_color=TEXT_WHITE,
+        )
+        heading.pack(pady=(0, 6))
+
+        description = ctk.CTkLabel(
+            content,
+            text="You haven't completed any speech practice sessions yet.\nStart your first session in Practice mode to track your speaking progress, fluency, and analytics here!",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13),
+            text_color=TEXT_ICE,
+            justify="center",
+        )
+        description.pack(pady=(0, 18))
+
+        start_button = ctk.CTkButton(
+            content,
+            text="Start Practice Now  →",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
+            fg_color=ACCENT_BLUE,
+            hover_color="#008F77",
+            text_color=TEXT_WHITE,
+            corner_radius=10,
+            height=44,
+            width=200,
+            command=self.start_new_practice_session,
+        )
+        start_button.pack()
+
     def _render_history_page(self):
         """Render top badges, sessions stream, quick stats, and filter sidebar with dynamic DB data."""
         for w in self.history_main_scroll.winfo_children():
@@ -4064,6 +3785,10 @@ class SpeakWiseApp(ctk.CTk):
 
         self.cached_history_sessions = self._load_user_history_from_db()
         total_count = len(self.cached_history_sessions)
+
+        if total_count == 0:
+            self._render_history_empty_state()
+            return
 
         if total_count > 0:
             avg_score_val = sum(s["score"] for s in self.cached_history_sessions) / total_count
