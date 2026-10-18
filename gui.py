@@ -1,5 +1,6 @@
 import os
 import sys
+import hmac
 
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -8,9 +9,9 @@ os.environ["GLOG_minloglevel"] = "3"
 import json
 import time
 import threading
+import logging
 import winsound
 import tkinter as tk
-from tkinter import messagebox
 from dotenv import load_dotenv
 import customtkinter as ctk
 from PIL import Image, ImageTk
@@ -64,12 +65,17 @@ from speakwise_database import (
     save_speech_session,
     get_all_databases,
     get_database_tables,
-    get_table_schema,
     get_table_data,
     get_table_row_count,
-    delete_table_record,
 )
-from login import hash_password, verify_password, save_session
+from login import (
+    hash_password,
+    verify_password,
+    save_session,
+    remember_user,
+    load_remembered_user,
+    clear_remembered_user,
+)
 from topics import get_random_topic, get_all_categories, CATEGORIES
 from ai import ai_prepare, analyze_relevance, CoachChatSession
 from report import print_report, calculate_overall
@@ -78,8 +84,10 @@ import video_capture
 from filler_detection import detect_fillers
 from transcription import transcribe_audio_detailed
 from video_analysis import analyze_video
-from audio_text import detect_pauses, get_audio_duration
+from audio_text import detect_pauses_detailed, get_audio_duration
 from recording_paths import generate_recording_paths
+from transcription import count_words
+from recording_session import record_session
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -190,9 +198,9 @@ DURATION_OPTIONS = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# SegmentedControl – animated pill-style tab selector
-# ---------------------------------------------------------------------------
+
+
+
 class SegmentedControl(ctk.CTkFrame):
     """Animated segmented control widget (pill selector) for filter tabs."""
 
@@ -302,7 +310,7 @@ class SegmentedControl(ctk.CTkFrame):
 
         def animate(step=0):
             progress = min(step / steps, 1)
-            # Smooth ease-in-out transition.
+
             eased = progress * progress * (3 - 2 * progress)
             position = start + (target - start) * eased
             self.indicator.place_configure(
@@ -350,7 +358,8 @@ class SpeakWiseApp(ctk.CTk):
         except Exception:
             pass
 
-        self.current_user = None
+        self.current_user = load_remembered_user()
+        self.admin_authenticated = False
 
         self.home_video = None
         self.home_video_label = None
@@ -438,6 +447,7 @@ class SpeakWiseApp(ctk.CTk):
             ("history", "  🕒  History"),
             ("profile", "  👤  Profile"),
             ("settings", "  ⚙️  Settings"),
+            ("admin", "  🗄️  Admin"),
         ]
 
         for i, (key, label) in enumerate(nav_items, start=1):
@@ -495,6 +505,7 @@ class SpeakWiseApp(ctk.CTk):
         self.pages["reports"] = self._create_reports_view()
         self.pages["profile"] = self._create_profile_view()
         self.pages["settings"] = self._create_settings_view()
+        self.pages["admin"] = self._create_admin_view()
 
     def _build_top_bar(self):
         """Build top progress stepper bar and user badge."""
@@ -2192,7 +2203,8 @@ class SpeakWiseApp(ctk.CTk):
             w.destroy()
 
         dur = self.selected_duration["seconds"]
-        self.stop_recording_event = threading.Event()
+        session_stop_event = threading.Event()
+        self.stop_recording_event = session_stop_event
 
         main_frame = ctk.CTkFrame(self.practice_container, fg_color="transparent")
         main_frame.pack(fill="both", expand=True)
@@ -2431,53 +2443,17 @@ class SpeakWiseApp(ctk.CTk):
         self.video_path = video_path
 
         def _rec_thread():
-            start_event = threading.Event()
-            audio_ready = threading.Event()
-            video_ready = threading.Event()
-            recording_status = {}
-            self.recording_status = recording_status
-            timing = {}
+            def update_timer(remaining, total):
+                self.safe_after(0, lambda r=remaining, d=total: self._draw_timer_ring(r, d))
 
-            audio_th = threading.Thread(
-                target=audio.record_audio,
-                args=(dur, start_event, audio_ready, recording_status, audio_path, self.stop_recording_event),
+            self.recording_status, _timing = record_session(
+                dur,
+                audio_path,
+                video_path,
+                stop_event=session_stop_event,
+                show_window=True,
+                on_tick=update_timer,
             )
-            video_th = threading.Thread(
-                target=video_capture.record_video,
-                args=(
-                    dur,
-                    start_event,
-                    video_ready,
-                    recording_status,
-                    timing,
-                    video_path,
-                    None,
-                    True,
-                    self.stop_recording_event,
-                ),
-            )
-
-            audio_th.start()
-            video_th.start()
-
-            audio_ready.wait(timeout=5.0)
-            video_ready.wait(timeout=5.0)
-
-            timing["start_time"] = time.perf_counter()
-            timing["deadline"] = timing["start_time"] + dur
-            start_event.set()
-
-            deadline = timing["deadline"]
-            while not self.stop_recording_event.is_set():
-                rem = deadline - time.perf_counter()
-                if rem <= 0:
-                    break
-                self.safe_after(0, lambda r=rem, d=dur: self._draw_timer_ring(r, d))
-                time.sleep(0.08)
-
-            self.stop_recording_event.set()
-            video_th.join(timeout=3.0)
-            audio_th.join(timeout=3.0)
 
             self.safe_after(0, self._advance_to_step4_results)
 
@@ -2566,30 +2542,31 @@ class SpeakWiseApp(ctk.CTk):
             if recording_status.get("video_analysis_eligible", True):
                 try:
                     video_report = analyze_video(self.video_path)
-                    video_status = "success" if video_report else "unavailable"
+                    video_status = video_report.get("analysis_status", "success") if video_report else "unavailable"
+                    video_error = video_report.get("analysis_error") or video_error
                 except Exception as error:
                     video_status = "failed"
                     video_error = str(error)
 
             audio_duration = get_audio_duration(self.audio_path)
-            audio_status = "available" if audio_duration > 0 and not recording_status.get("audio_error") else "unavailable"
+            audio_status = "available" if recording_status.get("audio_recording_valid") and audio_duration > 0 and not recording_status.get("audio_error") else "unavailable"
             if recording_status.get("audio_error"):
                 transcription_result = {"text": "", "status": "failed", "error": recording_status["audio_error"]}
             else:
                 transcription_result = transcribe_audio_detailed(self.audio_path)
             transcription = transcription_result["text"]
-            words = transcription.split()
-            total_words = len(words)
+            total_words = count_words(transcription)
 
             fillers = detect_fillers(transcription)
             total_fillers = sum(fillers.values())
-            pauses = detect_pauses(self.audio_path)
+            pauses, pause_error = detect_pauses_detailed(self.audio_path)
+            pause_status = "available" if pause_error is None else "unavailable"
 
             relevance_res = None
             try:
                 relevance_res = analyze_relevance(self.current_topic_data["title"], transcription)
             except Exception:
-                pass
+                logging.getLogger(__name__).exception("Topic relevance analysis failed")
 
             target_duration = self.selected_duration["seconds"]
             dur = audio_duration or target_duration
@@ -2609,6 +2586,8 @@ class SpeakWiseApp(ctk.CTk):
                 audio_status=audio_status,
                 video_status=video_status,
                 video_error=video_error,
+                pause_status=pause_status,
+                pause_error=pause_error,
             )
 
             if self.current_user:
@@ -2734,8 +2713,10 @@ class SpeakWiseApp(ctk.CTk):
         if not isinstance(pauses_list, list):
             pauses_list = []
 
-        eye_pct = rep.get("eye_contact_pct", 0.0)
-        head_pct = rep.get("head_centering_pct", 0.0)
+        eye_pct = rep.get("eye_contact_pct")
+        head_pct = rep.get("head_centering_pct")
+        eye_pct_label = f"{eye_pct:.0f}%" if eye_pct is not None else "N/A"
+        head_pct_label = f"{head_pct:.0f}%" if head_pct is not None else "N/A"
         overall_val = float(rep.get("overall", 0.0))
         is_silent = rep.get("is_silent", total_words == 0)
 
@@ -2779,9 +2760,21 @@ class SpeakWiseApp(ctk.CTk):
         rep_title.pack(side="left", padx=(0, 12))
 
         analysis_unavailable = rep.get("transcription_status") in ("failed", "audio_missing") or rep.get("audio_status") == "unavailable"
-        badge_txt = "⚠️ Analysis Unavailable" if analysis_unavailable else ("⚠️ No Speech Detected" if is_silent else ("🌟 Outstanding" if overall_val >= 8.0 else ("🎯 Solid Effort" if overall_val >= 5.5 else "📈 Practice Needed")))
-        badge_fg = "#2b141a" if (is_silent or analysis_unavailable) else ("#172825" if overall_val >= 8.0 else ("#221c1e" if overall_val >= 5.5 else "#2b141a"))
-        badge_tc = COLOR_RUBY if (is_silent or analysis_unavailable) else (COLOR_CYAN if overall_val >= 8.0 else (COLOR_ICE if overall_val >= 5.5 else COLOR_RUBY))
+        analysis_partial = rep.get("video_status") != "success" or rep.get("pause_status") != "available"
+        if analysis_unavailable:
+            badge_txt = "Analysis Unavailable"
+        elif analysis_partial:
+            badge_txt = "Partial Analysis"
+        elif is_silent:
+            badge_txt = "No Speech Detected"
+        elif overall_val >= 8.0:
+            badge_txt = "Outstanding"
+        elif overall_val >= 5.5:
+            badge_txt = "Solid Effort"
+        else:
+            badge_txt = "Practice Needed"
+        badge_fg = "#2b141a" if (is_silent or analysis_unavailable or analysis_partial) else ("#172825" if overall_val >= 8.0 else ("#221c1e" if overall_val >= 5.5 else "#2b141a"))
+        badge_tc = COLOR_RUBY if (is_silent or analysis_unavailable or analysis_partial) else (COLOR_CYAN if overall_val >= 8.0 else (COLOR_ICE if overall_val >= 5.5 else COLOR_RUBY))
 
         stat_badge = ctk.CTkLabel(
             title_row,
@@ -2910,9 +2903,9 @@ class SpeakWiseApp(ctk.CTk):
 
         ct3 = ctk.CTkLabel(c3_text, text="Eye Contact & Presence", font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=TEXT_SUBTLE)
         ct3.pack(anchor="w")
-        cv3 = ctk.CTkLabel(c3_text, text=f"{eye_pct:.0f}% Contact", font=ctk.CTkFont(family=FONT_FAMILY, size=15, weight="bold"), text_color=COLOR_CYAN)
+        cv3 = ctk.CTkLabel(c3_text, text=f"{eye_pct_label} Contact", font=ctk.CTkFont(family=FONT_FAMILY, size=15, weight="bold"), text_color=COLOR_CYAN)
         cv3.pack(anchor="w", pady=(0, 2))
-        cs3 = ctk.CTkLabel(c3_text, text=f"Head Steady: {head_pct:.0f}%", font=ctk.CTkFont(family=FONT_FAMILY, size=10), text_color=TEXT_SUBTLE)
+        cs3 = ctk.CTkLabel(c3_text, text=f"Head Steady: {head_pct_label}", font=ctk.CTkFont(family=FONT_FAMILY, size=10), text_color=TEXT_SUBTLE)
         cs3.pack(anchor="w")
 
         c4 = ctk.CTkFrame(metrics_row, fg_color=CARD_BG, corner_radius=14, border_width=1, border_color=CARD_BORDER)
@@ -3124,8 +3117,8 @@ class SpeakWiseApp(ctk.CTk):
             ("📄", "Topic Relevance", rep.get("relevance", 0.0), COLOR_CYAN, "Alignment with assigned topic."),
             ("⏱️", "Speech Pace", rep.get("pace", 0.0), COLOR_ICE, f"Delivery speed ({pace_wpm} WPM)."),
             ("⏸️", "Pause Mgmt", rep.get("pauses", 0.0), COLOR_TEAL, "Hesitation and pause balance."),
-            ("👁️", "Eye Contact", rep.get("eye_contact", 0.0), COLOR_CYAN, f"Camera gaze ({eye_pct:.0f}% contact)."),
-            ("👤", "Head Stability", rep.get("head_stability", 0.0), COLOR_TEAL, f"Head posture ({head_pct:.0f}% centered)."),
+            ("👁️", "Eye Contact", rep.get("eye_contact"), COLOR_CYAN, f"Camera gaze ({eye_pct_label} contact)."),
+            ("👤", "Head Stability", rep.get("head_stability"), COLOR_TEAL, f"Head posture ({head_pct_label} centered)."),
         ]
 
         for icon, name, val, bar_color, desc in score_rows:
@@ -3281,33 +3274,8 @@ class SpeakWiseApp(ctk.CTk):
         top_box = ctk.CTkFrame(self.home_container, fg_color="transparent")
         top_box.pack(side="top", fill="x")
 
-        badge_row = ctk.CTkFrame(top_box, fg_color="transparent")
-        badge_row.pack(anchor="w", pady=(2, 18))
-
-        badge = ctk.CTkLabel(
-            badge_row,
-            text="  ✨ AI-POWERED SPEECH PLATFORM  ",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
-            text_color=COLOR_CYAN,
-            fg_color="#261e21",
-            corner_radius=14,
-            height=28,
-        )
-        badge.pack(side="left", padx=(0, 10))
-
-        status_badge = ctk.CTkLabel(
-            badge_row,
-            text="  🟢 Live Gemini & Computer Vision Ready  ",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11),
-            text_color=COLOR_CYAN,
-            fg_color="#172825",
-            corner_radius=14,
-            height=28,
-        )
-        status_badge.pack(side="left")
-
         hero = ctk.CTkFrame(top_box, fg_color="transparent")
-        hero.pack(anchor="w", pady=(0, 4))
+        hero.pack(anchor="w", pady=(2, 4))
         ctk.CTkLabel(
             hero, text="SpeakWise", text_color=TEXT_WHITE,
             font=ctk.CTkFont(family=FONT_FAMILY, size=76, weight="bold"),
@@ -3327,26 +3295,6 @@ class SpeakWiseApp(ctk.CTk):
             anchor="w",
         )
         sub.pack(anchor="w", pady=(0, 18))
-
-        chips_row = ctk.CTkFrame(top_box, fg_color="transparent")
-        chips_row.pack(anchor="w", pady=(0, 18))
-
-        chips = [
-            ("🎯", "17+ Extempore Categories"),
-            ("🤖", "Gemini Flash AI Coach"),
-            ("👁️", "Eye Contact & Posture Tracking"),
-            ("⚡", "WPM & Filler Detection"),
-        ]
-        for c_icon, c_text in chips:
-            chip_f = ctk.CTkFrame(chips_row, fg_color="#1B1B1D", corner_radius=13, border_width=1, border_color="#303033")
-            chip_f.pack(side="left", padx=(0, 10))
-            c_lbl = ctk.CTkLabel(
-                chip_f,
-                text=f"{c_icon} {c_text}",
-                font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
-                text_color=COLOR_ICE,
-            )
-            c_lbl.pack(padx=14, pady=8)
 
         action_card = ctk.CTkFrame(
             top_box,
@@ -3548,14 +3496,7 @@ class SpeakWiseApp(ctk.CTk):
 
         self.history_main_scroll = ctk.CTkScrollableFrame(frame, fg_color="transparent")
         self.history_main_scroll.grid(row=0, column=0, sticky="nsew")
-        self.history_main_scroll.grid_columnconfigure(0, weight=7, uniform="hist_col")
-        self.history_main_scroll.grid_columnconfigure(1, weight=3, uniform="hist_col")
-
-        self.history_active_tab = "All Sessions"
-        self.history_selected_topic_filter = "All Topics"
-        self.history_selected_perf_filter = "All Scores"
-        self.history_sort_order = "Newest First"
-        self.history_date_filter = "All Time"
+        self.history_main_scroll.grid_columnconfigure(0, weight=1)
 
         self._render_history_page()
         return frame
@@ -3779,333 +3720,36 @@ class SpeakWiseApp(ctk.CTk):
         start_button.pack()
 
     def _render_history_page(self):
-        """Render top badges, sessions stream, quick stats, and filter sidebar with dynamic DB data."""
-        for w in self.history_main_scroll.winfo_children():
-            w.destroy()
+        """Render saved practice sessions in a simple, single-column history view."""
+        for widget in self.history_main_scroll.winfo_children():
+            widget.destroy()
 
         self.cached_history_sessions = self._load_user_history_from_db()
-        total_count = len(self.cached_history_sessions)
-
-        if total_count == 0:
+        if not self.cached_history_sessions:
             self._render_history_empty_state()
             return
 
-        if total_count > 0:
-            avg_score_val = sum(s["score"] for s in self.cached_history_sessions) / total_count
-            avg_score_text = f"{avg_score_val:.1f}/10"
-            avg_fluency_val = (sum(s["fluency"] for s in self.cached_history_sessions) / total_count) * 10
-            avg_fluency_text = f"{avg_fluency_val:.0f}%"
-            best_score_val = max(s["score"] for s in self.cached_history_sessions)
-            best_score_text = f"{best_score_val:.1f}"
-            total_sessions_text = str(total_count)
-        else:
-            avg_score_text = "--"
-            avg_fluency_text = "--"
-            best_score_text = "--"
-            total_sessions_text = "0"
+        header = ctk.CTkFrame(self.history_main_scroll, fg_color="transparent")
+        header.pack(fill="x", pady=(0, 18))
 
-        h_frame = ctk.CTkFrame(self.history_main_scroll, fg_color="transparent")
-        h_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 18))
-
-        h_left = ctk.CTkFrame(h_frame, fg_color="transparent")
-        h_left.pack(side="left")
-
-        h_icon_row = ctk.CTkFrame(h_left, fg_color="transparent")
-        h_icon_row.pack(anchor="w")
-
-        clk_icon = ctk.CTkLabel(
-            h_icon_row,
-            text="🕒",
-            font=ctk.CTkFont(size=22),
-            width=36,
-            height=36,
-            corner_radius=18,
-            fg_color="#172825",
-        )
-        clk_icon.pack(side="left", padx=(0, 10))
-
-        title_lbl = ctk.CTkLabel(
-            h_icon_row,
+        title_row = ctk.CTkFrame(header, fg_color="transparent")
+        title_row.pack(anchor="w")
+        ctk.CTkLabel(
+            title_row,
             text="History",
             font=ctk.CTkFont(family=FONT_FAMILY, size=30, weight="bold"),
             text_color=TEXT_WHITE,
-        )
-        title_lbl.pack(side="left")
-
-        sub_lbl = ctk.CTkLabel(
-            h_left,
-            text="Your past practice sessions, performance and progress — all in one place.",
+        ).pack(side="left")
+        ctk.CTkLabel(
+            header,
+            text="Your past practice sessions.",
             font=ctk.CTkFont(family=FONT_FAMILY, size=13),
             text_color=TEXT_MUTED,
-        )
-        sub_lbl.pack(anchor="w", pady=(2, 0))
+        ).pack(anchor="w", pady=(4, 0))
 
-        h_right = ctk.CTkFrame(h_frame, fg_color="transparent")
-        h_right.pack(side="right")
-
-        badge_tot = ctk.CTkFrame(
-            h_right,
-            fg_color=CARD_BG,
-            corner_radius=12,
-            border_width=1,
-            border_color=CARD_BORDER,
-            width=140,
-            height=58,
-        )
-        badge_tot.pack(side="left", padx=(0, 12))
-        badge_tot.pack_propagate(False)
-
-        b_tot_in = ctk.CTkFrame(badge_tot, fg_color="transparent")
-        b_tot_in.pack(expand=True, padx=12)
-
-        icon_cal = ctk.CTkLabel(b_tot_in, text="📅", font=ctk.CTkFont(size=16), text_color=COLOR_CYAN)
-        icon_cal.pack(side="left", padx=(0, 8))
-
-        b_tot_txt = ctk.CTkFrame(b_tot_in, fg_color="transparent")
-        b_tot_txt.pack(side="left")
-
-        b_tot_cap = ctk.CTkLabel(b_tot_txt, text="Total Sessions", font=ctk.CTkFont(family=FONT_FAMILY, size=10), text_color=TEXT_SUBTLE)
-        b_tot_cap.pack(anchor="w")
-        b_tot_val = ctk.CTkLabel(b_tot_txt, text=total_sessions_text, font=ctk.CTkFont(family=FONT_FAMILY, size=16, weight="bold"), text_color=TEXT_WHITE)
-        b_tot_val.pack(anchor="w")
-
-        badge_avg = ctk.CTkFrame(
-            h_right,
-            fg_color="#172825",
-            corner_radius=12,
-            border_width=1,
-            border_color="#008f77",
-            width=140,
-            height=58,
-        )
-        badge_avg.pack(side="left")
-        badge_avg.pack_propagate(False)
-
-        b_avg_in = ctk.CTkFrame(badge_avg, fg_color="transparent")
-        b_avg_in.pack(expand=True, padx=12)
-
-        icon_chart = ctk.CTkLabel(b_avg_in, text="📈", font=ctk.CTkFont(size=16), text_color=COLOR_CYAN)
-        icon_chart.pack(side="left", padx=(0, 8))
-
-        b_avg_txt = ctk.CTkFrame(b_avg_in, fg_color="transparent")
-        b_avg_txt.pack(side="left")
-
-        b_avg_cap = ctk.CTkLabel(b_avg_txt, text="Avg. Score", font=ctk.CTkFont(family=FONT_FAMILY, size=10), text_color=TEXT_SUBTLE)
-        b_avg_cap.pack(anchor="w")
-        b_avg_val = ctk.CTkLabel(b_avg_txt, text=avg_score_text, font=ctk.CTkFont(family=FONT_FAMILY, size=16, weight="bold"), text_color=COLOR_CYAN)
-        b_avg_val.pack(anchor="w")
-
-        left_sessions_col = ctk.CTkFrame(self.history_main_scroll, fg_color="transparent")
-        left_sessions_col.grid(row=1, column=0, sticky="nsew", padx=(0, 16))
-
-        tabs_row = ctk.CTkFrame(left_sessions_col, fg_color="transparent")
-        tabs_row.pack(fill="x", pady=(0, 14))
-
-        tabs_box = ctk.CTkFrame(tabs_row, fg_color="transparent")
-        tabs_box.pack(side="left")
-
-        self.hist_tab_buttons = {}
-        tab_names = ["All Sessions", "Speaking", "Topics", "Date"]
-        for t_name in tab_names:
-            is_act = (t_name == self.history_active_tab)
-            t_btn = ctk.CTkButton(
-                tabs_box,
-                text=t_name,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold" if is_act else "normal"),
-                fg_color="#172825" if is_act else "transparent",
-                hover_color=CARD_HOVER,
-                text_color=COLOR_CYAN if is_act else TEXT_MUTED,
-                corner_radius=8,
-                height=34,
-                command=lambda tn=t_name: self._on_hist_tab_click(tn),
-            )
-            t_btn.pack(side="left", padx=(0, 6))
-            self.hist_tab_buttons[t_name] = t_btn
-
-        sort_box = ctk.CTkFrame(tabs_row, fg_color="transparent")
-        sort_box.pack(side="right")
-
-        self.sort_menu = ctk.CTkOptionMenu(
-            sort_box,
-            values=["⇅ Newest First", "⇅ Oldest First", "⇅ Highest Score", "⇅ Lowest Score"],
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
-            fg_color="#1c1719",
-            button_color="#2b2326",
-            button_hover_color=CARD_HOVER,
-            dropdown_fg_color="#1c1719",
-            text_color=COLOR_ICE,
-            corner_radius=8,
-            height=34,
-            command=self._on_sort_change,
-        )
-        self.sort_menu.set(self.history_sort_order)
-        self.sort_menu.pack(side="right")
-
-        self.history_items_container = ctk.CTkFrame(left_sessions_col, fg_color="transparent")
+        self.history_items_container = ctk.CTkFrame(self.history_main_scroll, fg_color="transparent")
         self.history_items_container.pack(fill="both", expand=True)
-
         self._render_session_cards()
-
-        right_sidebar_col = ctk.CTkFrame(self.history_main_scroll, fg_color="transparent")
-        right_sidebar_col.grid(row=1, column=1, sticky="nsew")
-
-        stats_card = ctk.CTkFrame(right_sidebar_col, fg_color=CARD_BG, corner_radius=16, border_width=1, border_color=CARD_BORDER)
-        stats_card.pack(fill="x", pady=(0, 14))
-
-        st_in = ctk.CTkFrame(stats_card, fg_color="transparent")
-        st_in.pack(fill="both", expand=True, padx=16, pady=16)
-
-        st_h = ctk.CTkLabel(st_in, text="📈  Quick Stats", font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"), text_color=TEXT_WHITE)
-        st_h.pack(anchor="w", pady=(0, 12))
-
-        grid_2x2 = ctk.CTkFrame(st_in, fg_color="transparent")
-        grid_2x2.pack(fill="x")
-        grid_2x2.grid_columnconfigure(0, weight=1, uniform="stat_cell")
-        grid_2x2.grid_columnconfigure(1, weight=1, uniform="stat_cell")
-
-        stat_items = [
-            ("📅", total_sessions_text, "Total Sessions", 0, 0, COLOR_CYAN),
-            ("🏆", avg_score_text.replace("/10", ""), "Average Score", 0, 1, COLOR_ICE),
-            ("〰️", avg_fluency_text, "Avg. Fluency", 1, 0, COLOR_TEAL),
-            ("⭐", best_score_text, "Best Score", 1, 1, COLOR_CYAN),
-        ]
-
-        for icon, val, lbl, r_idx, c_idx, color in stat_items:
-            cell = ctk.CTkFrame(grid_2x2, fg_color="#1c1719", corner_radius=10, border_width=1, border_color=CARD_BORDER, height=66)
-            cell.grid(row=r_idx, column=c_idx, padx=4, pady=4, sticky="nsew")
-            cell.pack_propagate(False)
-
-            c_in = ctk.CTkFrame(cell, fg_color="transparent")
-            c_in.pack(expand=True, padx=8)
-
-            c_row = ctk.CTkFrame(c_in, fg_color="transparent")
-            c_row.pack(anchor="w")
-
-            i_l = ctk.CTkLabel(c_row, text=icon, font=ctk.CTkFont(size=14))
-            i_l.pack(side="left", padx=(0, 6))
-
-            v_l = ctk.CTkLabel(c_row, text=val, font=ctk.CTkFont(family=FONT_FAMILY, size=15, weight="bold"), text_color=TEXT_WHITE)
-            v_l.pack(side="left")
-
-            l_l = ctk.CTkLabel(c_in, text=lbl, font=ctk.CTkFont(family=FONT_FAMILY, size=10), text_color=TEXT_SUBTLE)
-            l_l.pack(anchor="w")
-
-        filter_card = ctk.CTkFrame(right_sidebar_col, fg_color=CARD_BG, corner_radius=16, border_width=1, border_color=CARD_BORDER)
-        filter_card.pack(fill="x", pady=(0, 14))
-
-        f_in = ctk.CTkFrame(filter_card, fg_color="transparent")
-        f_in.pack(fill="both", expand=True, padx=16, pady=16)
-
-        f_head_row = ctk.CTkFrame(f_in, fg_color="transparent")
-        f_head_row.pack(fill="x", pady=(0, 12))
-
-        f_h = ctk.CTkLabel(f_head_row, text="🌪️  Filters", font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"), text_color=TEXT_WHITE)
-        f_h.pack(side="left")
-
-        btn_clear_f = ctk.CTkButton(
-            f_head_row,
-            text="Clear All",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11),
-            fg_color="transparent",
-            hover_color=CARD_HOVER,
-            text_color=COLOR_CYAN,
-            width=60,
-            height=24,
-            command=self._clear_filters,
-        )
-        btn_clear_f.pack(side="right")
-
-        f_d_lbl = ctk.CTkLabel(f_in, text="📅  Date Range", font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=TEXT_SUBTLE)
-        f_d_lbl.pack(anchor="w", pady=(0, 4))
-        self.f_date_seg = SegmentedControl(
-            f_in,
-            values=["7 Days", "30 Days", "All Time"],
-            default=getattr(self, "history_date_filter", "All Time"),
-            command=self._on_date_seg_change,
-            height=36,
-        )
-        self.f_date_seg.pack(fill="x", pady=(0, 10))
-
-        f_t_lbl = ctk.CTkLabel(f_in, text="📑  Topic", font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=TEXT_SUBTLE)
-        f_t_lbl.pack(anchor="w", pady=(0, 4))
-        self.f_topic_menu = ctk.CTkOptionMenu(
-            f_in,
-            values=["All Topics", "Technology", "Science", "History", "Business", "Society", "Environment", "Entertainment"],
-            fg_color="#1c1719",
-            button_color="#2b2326",
-            dropdown_fg_color="#1c1719",
-            text_color=COLOR_ICE,
-            corner_radius=8,
-            height=34,
-        )
-        self.f_topic_menu.set(self.history_selected_topic_filter)
-        self.f_topic_menu.pack(fill="x", pady=(0, 10))
-
-        f_p_lbl = ctk.CTkLabel(f_in, text="📊  Performance", font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=TEXT_SUBTLE)
-        f_p_lbl.pack(anchor="w", pady=(0, 4))
-        self.f_perf_menu = ctk.CTkOptionMenu(
-            f_in,
-            values=["All Scores", "High (8+)", "Medium (6–8)", "Low (<6)"],
-            fg_color="#1c1719",
-            button_color="#2b2326",
-            dropdown_fg_color="#1c1719",
-            text_color=COLOR_ICE,
-            corner_radius=8,
-            height=34,
-        )
-        self.f_perf_menu.set(self.history_selected_perf_filter)
-        self.f_perf_menu.pack(fill="x", pady=(0, 14))
-
-        btn_apply_f = ctk.CTkButton(
-            f_in,
-            text="Apply Filters",
-            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"),
-            fg_color=ACCENT_BLUE,
-            hover_color="#008f77",
-            corner_radius=10,
-            height=40,
-            command=self._apply_history_filters,
-        )
-        btn_apply_f.pack(fill="x")
-
-        recent_card = ctk.CTkFrame(right_sidebar_col, fg_color=CARD_BG, corner_radius=16, border_width=1, border_color=CARD_BORDER)
-        recent_card.pack(fill="x", pady=(0, 14))
-
-        rc_in = ctk.CTkFrame(recent_card, fg_color="transparent")
-        rc_in.pack(fill="both", expand=True, padx=16, pady=16)
-
-        rc_h = ctk.CTkLabel(rc_in, text="💡  Recent Topics", font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"), text_color=COLOR_CYAN)
-        rc_h.pack(anchor="w", pady=(0, 10))
-
-        cat_counts = {}
-        for s in self.cached_history_sessions:
-            c_name = s.get("category", "General")
-            cat_counts[c_name] = cat_counts.get(c_name, 0) + 1
-
-        dot_colors = ["🟢", "🔵", "🟣", "🔴", "🟡", "🟠"]
-        if cat_counts:
-            recent_items = [
-                (dot_colors[i % len(dot_colors)], cat_name, str(count))
-                for i, (cat_name, count) in enumerate(cat_counts.items())
-            ]
-        else:
-            recent_items = [("⚪", "No practice topics yet", "0")]
-
-        for dot, name, cnt in recent_items:
-            r_row = ctk.CTkFrame(rc_in, fg_color="transparent")
-            r_row.pack(fill="x", pady=3)
-
-            r_left = ctk.CTkFrame(r_row, fg_color="transparent")
-            r_left.pack(side="left")
-
-            d_lbl = ctk.CTkLabel(r_left, text=dot, font=ctk.CTkFont(size=10))
-            d_lbl.pack(side="left", padx=(0, 6))
-
-            n_lbl = ctk.CTkLabel(r_left, text=name, font=ctk.CTkFont(family=FONT_FAMILY, size=12), text_color=TEXT_MUTED)
-            n_lbl.pack(side="left")
-
-            c_lbl = ctk.CTkLabel(r_row, text=cnt, font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"), text_color=TEXT_WHITE)
-            c_lbl.pack(side="right")
 
     def _render_session_cards(self):
         """Populate the sessions list from dynamic MySQL records with empty state handling."""
@@ -4116,38 +3760,6 @@ class SpeakWiseApp(ctk.CTk):
         if sessions is None:
             sessions = self._load_user_history_from_db()
             self.cached_history_sessions = sessions
-
-        # --- Date range filter via SegmentedControl ---
-        date_filter = getattr(self, "history_date_filter", "All Time")
-        if date_filter != "All Time":
-            import datetime
-            cutoff_days = 7 if date_filter == "7 Days" else 30
-            cutoff = datetime.datetime.now() - datetime.timedelta(days=cutoff_days)
-            def _parse_date(s):
-                try:
-                    return datetime.datetime.strptime(s["date"], "%d %b %Y, %I:%M %p")
-                except Exception:
-                    return datetime.datetime.min
-            sessions = [s for s in sessions if _parse_date(s) >= cutoff]
-
-        if self.history_selected_topic_filter != "All Topics":
-            sessions = [s for s in sessions if s["category"].lower() == self.history_selected_topic_filter.lower()]
-
-        if self.history_selected_perf_filter == "High (8+)":
-            sessions = [s for s in sessions if s["score"] >= 8.0]
-        elif self.history_selected_perf_filter == "Medium (6–8)":
-            sessions = [s for s in sessions if 6.0 <= s["score"] < 8.0]
-        elif self.history_selected_perf_filter == "Low (<6)":
-            sessions = [s for s in sessions if s["score"] < 6.0]
-
-        if self.history_sort_order == "Newest First":
-            pass
-        elif self.history_sort_order == "Oldest First":
-            sessions = list(reversed(sessions))
-        elif self.history_sort_order == "Highest Score":
-            sessions = sorted(sessions, key=lambda x: x["score"], reverse=True)
-        elif self.history_sort_order == "Lowest Score":
-            sessions = sorted(sessions, key=lambda x: x["score"], reverse=False)
 
         if not sessions:
             empty_card = ctk.CTkFrame(
@@ -4165,17 +3777,9 @@ class SpeakWiseApp(ctk.CTk):
             e_icon = ctk.CTkLabel(e_inner, text="🕒", font=ctk.CTkFont(size=44))
             e_icon.pack(pady=(0, 12))
 
-            has_any = bool(getattr(self, "cached_history_sessions", []))
-            title_text = "No Filtered Sessions Found" if has_any else "No Practice Sessions Yet"
-            sub_text = (
-                "Try adjusting your topic or performance filter to see your past sessions."
-                if has_any
-                else "You haven't completed any speech practice sessions yet.\nStart your first session in Practice mode to track your speaking progress, fluency, and analytics here!"
-            )
-
             e_title = ctk.CTkLabel(
                 e_inner,
-                text=title_text,
+                text="No Practice Sessions Yet",
                 font=ctk.CTkFont(family=FONT_FAMILY, size=18, weight="bold"),
                 text_color=TEXT_WHITE,
             )
@@ -4183,7 +3787,7 @@ class SpeakWiseApp(ctk.CTk):
 
             e_desc = ctk.CTkLabel(
                 e_inner,
-                text=sub_text,
+                text="You haven't completed any speech practice sessions yet.\nStart your first session in Practice mode to track your speaking progress, fluency, and analytics here!",
                 font=ctk.CTkFont(family=FONT_FAMILY, size=13),
                 text_color=TEXT_MUTED,
                 justify="center",
@@ -4390,41 +3994,6 @@ class SpeakWiseApp(ctk.CTk):
         self.show_page("reports")
 
 
-    def _on_hist_tab_click(self, tab_name):
-        self.history_active_tab = tab_name
-        for tn, btn in self.hist_tab_buttons.items():
-            if tn == tab_name:
-                btn.configure(fg_color="#172825", text_color=COLOR_CYAN, font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold"))
-            else:
-                btn.configure(fg_color="transparent", text_color=TEXT_MUTED, font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="normal"))
-        self._render_session_cards()
-
-    def _on_sort_change(self, val):
-        self.history_sort_order = val
-        self._render_session_cards()
-
-    def _on_date_seg_change(self, value):
-        """Called automatically when the animated date SegmentedControl changes."""
-        self.history_date_filter = value
-        self._render_session_cards()
-
-    def _apply_history_filters(self):
-        self.history_selected_topic_filter = self.f_topic_menu.get()
-        self.history_selected_perf_filter = self.f_perf_menu.get()
-        if hasattr(self, "f_date_seg"):
-            self.history_date_filter = self.f_date_seg.get()
-        self._render_session_cards()
-
-    def _clear_filters(self):
-        if hasattr(self, "f_date_seg"):
-            self.f_date_seg.set("All Time", notify=False)
-        self.history_date_filter = "All Time"
-        self.f_topic_menu.set("All Topics")
-        self.f_perf_menu.set("All Scores")
-        self.history_selected_topic_filter = "All Topics"
-        self.history_selected_perf_filter = "All Scores"
-        self._render_session_cards()
-
     def _render_history_items(self):
         """Callback from sidebar history button."""
         if hasattr(self, "history_main_scroll"):
@@ -4558,43 +4127,8 @@ class SpeakWiseApp(ctk.CTk):
             e_lbl = ctk.CTkLabel(info, text=f"{email}   •   User ID: #{user_id}", font=ctk.CTkFont(family=FONT_FAMILY, size=13), text_color=TEXT_MUTED)
             e_lbl.pack(anchor="w", pady=(2, 0))
 
-            total_speeches = 0
-            try:
-                db = get_connection()
-                cursor = db.cursor(dictionary=True)
-                cursor.execute("SELECT COUNT(*) AS total FROM sessions WHERE user_id = %s", (user_id,))
-                total_speeches = cursor.fetchone()["total"]
-                cursor.close()
-                db.close()
-            except Exception:
-                pass
-
-            stats_row = ctk.CTkFrame(self.profile_content, fg_color="transparent")
-            stats_row.pack(fill="x", pady=(0, 24))
-            for col in range(3):
-                stats_row.grid_columnconfigure(col, weight=1, uniform="prof_stat")
-
-            p_stats = [
-                ("Total Speeches Practiced", str(total_speeches), "🎙️"),
-                ("Available Domains", "17 Categories", "📚"),
-                ("Membership Tier", "Pro Student", "⭐"),
-            ]
-
-            for c_idx, (s_label, s_val, s_icon) in enumerate(p_stats):
-                scard = ctk.CTkFrame(stats_row, fg_color=CARD_BG, corner_radius=12, border_width=1, border_color=CARD_BORDER)
-                scard.grid(row=0, column=c_idx, padx=8, sticky="nsew", ipady=8)
-
-                ic = ctk.CTkLabel(scard, text=s_icon, font=ctk.CTkFont(size=22))
-                ic.pack(pady=(12, 2))
-
-                v = ctk.CTkLabel(scard, text=s_val, font=ctk.CTkFont(family=FONT_FAMILY, size=18, weight="bold"), text_color=TEXT_WHITE)
-                v.pack()
-
-                l = ctk.CTkLabel(scard, text=s_label, font=ctk.CTkFont(family=FONT_FAMILY, size=11), text_color=TEXT_MUTED)
-                l.pack(pady=(0, 12))
-
             btn_bar = ctk.CTkFrame(self.profile_content, fg_color="transparent")
-            btn_bar.pack(fill="x", pady=(8, 0))
+            btn_bar.pack(fill="x", pady=(0, 0))
 
             btn_login = ctk.CTkButton(
                 btn_bar,
@@ -4655,32 +4189,76 @@ class SpeakWiseApp(ctk.CTk):
 
     def _handle_logout(self):
         """Log out current user and return to guest state."""
+        clear_remembered_user()
         self.current_user = None
         self._update_current_user_ui()
         self._refresh_profile_content()
         self.show_page("home")
-        messagebox.showinfo("Signed Out", "You have been signed out.")
 
-    def _handle_delete_user_account(self):
+    def _handle_delete_user_account(self, confirmed=False):
         if not self.current_user:
             return
 
-        confirm = messagebox.askyesno(
-            "Confirm Account Deletion",
-            f"Are you sure you want to permanently delete account '{self.current_user['name']}' ({self.current_user['email']}) from MySQL?",
-        )
-        if not confirm:
+        if not confirmed:
+            for child in self.profile_content.winfo_children():
+                if getattr(child, "_delete_confirmation_panel", False):
+                    child.destroy()
+
+            confirm_panel = ctk.CTkFrame(
+                self.profile_content,
+                fg_color="#2b141a",
+                corner_radius=10,
+                border_width=1,
+                border_color=COLOR_RUBY,
+            )
+            confirm_panel._delete_confirmation_panel = True
+            confirm_panel.pack(fill="x", pady=(14, 0))
+            ctk.CTkLabel(
+                confirm_panel,
+                text=f"Permanently delete account '{self.current_user['name']}' and all saved speech takes?",
+                font=ctk.CTkFont(size=13),
+                text_color=COLOR_ICE,
+                wraplength=620,
+                justify="left",
+            ).pack(anchor="w", padx=16, pady=(14, 10))
+
+            actions = ctk.CTkFrame(confirm_panel, fg_color="transparent")
+            actions.pack(anchor="w", padx=12, pady=(0, 12))
+            ctk.CTkButton(
+                actions,
+                text="Delete Account",
+                fg_color=COLOR_RUBY,
+                hover_color="#a83248",
+                text_color=COLOR_ICE,
+                command=lambda: self._handle_delete_user_account(confirmed=True),
+            ).pack(side="left", padx=4)
+            ctk.CTkButton(
+                actions,
+                text="Cancel",
+                fg_color="#1c1719",
+                hover_color=CARD_HOVER,
+                text_color=COLOR_ICE,
+                command=confirm_panel.destroy,
+            ).pack(side="left", padx=4)
             return
 
         success, msg = delete_user(self.current_user["user_id"])
         if success:
-            messagebox.showinfo("Account Deleted", "Your account and all speech takes were deleted from MySQL.")
+            clear_remembered_user()
             self.current_user = None
             self._update_current_user_ui()
             self._refresh_profile_content()
             self.show_page("home")
         else:
-            messagebox.showerror("Error", f"Failed to delete account: {msg}")
+            error_label = ctk.CTkLabel(
+                self.profile_content,
+                text=f"Could not delete account: {msg}",
+                font=ctk.CTkFont(size=12),
+                text_color=COLOR_RUBY,
+                wraplength=620,
+                justify="left",
+            )
+            error_label.pack(anchor="w", pady=(12, 0))
 
 
     def open_auth_modal(self, initial_tab="login"):
@@ -4757,6 +4335,7 @@ class SpeakWiseApp(ctk.CTk):
             success, result = authenticate_user(ident, pw)
             if success:
                 self.current_user = result
+                remember_user(result)
                 self._update_current_user_ui()
                 self._refresh_profile_content()
                 try:
@@ -4764,7 +4343,6 @@ class SpeakWiseApp(ctk.CTk):
                     modal.destroy()
                 except Exception:
                     pass
-                messagebox.showinfo("Login Successful", f"Welcome back, {result['name']}!")
             else:
                 if l_status.winfo_exists():
                     l_status.configure(text=str(result), text_color=COLOR_RUBY)
@@ -4845,6 +4423,7 @@ class SpeakWiseApp(ctk.CTk):
             success, result = register_user(name_val, email_val, pw_val)
             if success:
                 self.current_user = result
+                remember_user(result)
                 self._update_current_user_ui()
                 self._refresh_profile_content()
                 try:
@@ -4852,7 +4431,6 @@ class SpeakWiseApp(ctk.CTk):
                     modal.destroy()
                 except Exception:
                     pass
-                messagebox.showinfo("Registration Successful", f"Welcome to SpeakWise AI, {name_val}! Your account was dynamically added to MySQL in real-time.")
             else:
                 if r_status.winfo_exists():
                     r_status.configure(text=str(result), text_color=COLOR_RUBY)
@@ -4924,54 +4502,405 @@ class SpeakWiseApp(ctk.CTk):
         if hasattr(self, "home_container"):
             self._render_home_content()
 
-    def _open_database_inspector(self):
-        """Open real-time MySQL database table and user inspector."""
-        modal = ctk.CTkToplevel(self)
-        modal.title("MySQL Database Tables & Users — SpeakWise AI")
-        modal.geometry("700x520")
-        modal.configure(fg_color=BG_DARK)
+    def _create_admin_view(self):
+        frame = ctk.CTkFrame(self.pages_container, fg_color="transparent")
+        self.admin_container = frame
+        self._render_admin_page()
+        return frame
 
-        modal.update_idletasks()
-        x = self.winfo_x() + (self.winfo_width() // 2) - 350
-        y = self.winfo_y() + (self.winfo_height() // 2) - 260
-        modal.geometry(f"+{x}+{y}")
+    def _render_admin_page(self):
+        """Show the admin sign-in form or the protected database browser."""
+        if not hasattr(self, "admin_container") or not self.admin_container.winfo_exists():
+            return
+        for child in self.admin_container.winfo_children():
+            child.destroy()
 
-        box = ctk.CTkFrame(modal, fg_color=CARD_BG, corner_radius=16, border_width=1, border_color=CARD_BORDER)
-        box.pack(fill="both", expand=True, padx=20, pady=20)
+        if self.admin_authenticated:
+            self._render_admin_database()
+            return
 
-        header = ctk.CTkLabel(box, text="🗄️ MySQL Database Tables & Records", font=ctk.CTkFont(family=FONT_FAMILY, size=20, weight="bold"), text_color=TEXT_WHITE)
-        header.pack(anchor="w", padx=20, pady=(20, 4))
+        card = ctk.CTkFrame(
+            self.admin_container,
+            fg_color=CARD_BG,
+            corner_radius=16,
+            border_width=1,
+            border_color=CARD_BORDER,
+        )
+        card.place(relx=0.5, rely=0.42, anchor="center", relwidth=0.62)
+
+        ctk.CTkLabel(
+            card,
+            text="Administrator Sign In",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=26, weight="bold"),
+            text_color=TEXT_WHITE,
+        ).pack(anchor="w", padx=28, pady=(26, 4))
+        ctk.CTkLabel(
+            card,
+            text="Sign in to inspect users, practice sessions, takes, and the SpeakWise database tables.",
+            font=ctk.CTkFont(size=13),
+            text_color=TEXT_MUTED,
+            wraplength=620,
+            justify="left",
+        ).pack(anchor="w", padx=28, pady=(0, 18))
+
+        username_entry = ctk.CTkEntry(
+            card,
+            placeholder_text="Admin username",
+            fg_color="#1c1719",
+            border_color=CARD_BORDER,
+            text_color=COLOR_ICE,
+            height=44,
+        )
+        username_entry.pack(fill="x", padx=28, pady=7)
+        password_entry = ctk.CTkEntry(
+            card,
+            placeholder_text="Admin password",
+            show="•",
+            fg_color="#1c1719",
+            border_color=CARD_BORDER,
+            text_color=COLOR_ICE,
+            height=44,
+        )
+        password_entry.pack(fill="x", padx=28, pady=7)
+        status_label = ctk.CTkLabel(card, text="", font=ctk.CTkFont(size=12), text_color=COLOR_RUBY)
+        status_label.pack(anchor="w", padx=28, pady=(2, 0))
+
+        def sign_in(event=None):
+            expected_user = os.getenv("ADMIN_USERNAME", "")
+            expected_password = os.getenv("ADMIN_PASSWORD", "")
+            if not expected_user or not expected_password:
+                status_label.configure(
+                    text="Admin credentials are missing. Set ADMIN_USERNAME and ADMIN_PASSWORD in .env."
+                )
+                return
+
+            valid_user = hmac.compare_digest(username_entry.get().strip(), expected_user)
+            valid_password = hmac.compare_digest(password_entry.get(), expected_password)
+            if valid_user and valid_password:
+                self.admin_authenticated = True
+                self._render_admin_page()
+            else:
+                status_label.configure(text="Admin username or password is incorrect.")
+                password_entry.delete(0, "end")
+                password_entry.focus_set()
+
+        password_entry.bind("<Return>", sign_in)
+        username_entry.bind("<Return>", lambda _event: password_entry.focus_set())
+        ctk.CTkButton(
+            card,
+            text="Sign In to Admin",
+            fg_color=ACCENT_BLUE,
+            hover_color="#008f77",
+            height=44,
+            command=sign_in,
+        ).pack(fill="x", padx=28, pady=(14, 26))
+        username_entry.focus_set()
+
+    def _render_admin_database(self):
+        db_name = os.getenv("DB_NAME", "speakwise")
+        self.admin_table = getattr(self, "admin_table", "users")
+        self.admin_page_number = getattr(self, "admin_page_number", 1)
+        self.admin_search = getattr(self, "admin_search", "")
+
+        page = ctk.CTkFrame(self.admin_container, fg_color="transparent")
+        page.pack(fill="both", expand=True)
+
+        header = ctk.CTkFrame(page, fg_color="transparent")
+        header.pack(fill="x", pady=(0, 14))
+        title_box = ctk.CTkFrame(header, fg_color="transparent")
+        title_box.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(
+            title_box,
+            text="Database Administration",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=27, weight="bold"),
+            text_color=TEXT_WHITE,
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            title_box,
+            text=f"Database: {db_name}  ?  User passwords are hidden",
+            font=ctk.CTkFont(size=12),
+            text_color=TEXT_MUTED,
+        ).pack(anchor="w", pady=(3, 0))
+
+        def admin_logout():
+            self.admin_authenticated = False
+            self._render_admin_page()
+
+        ctk.CTkButton(
+            header,
+            text="Refresh",
+            width=100,
+            fg_color="#2b2326",
+            hover_color=CARD_HOVER,
+            command=self._render_admin_page,
+        ).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(
+            header,
+            text="Sign Out",
+            width=100,
+            fg_color="#2b141a",
+            hover_color="#3d1b24",
+            command=admin_logout,
+        ).pack(side="right")
 
         stats = get_db_stats() or {"users": 0, "sessions": 0, "takes": 0}
-        sub = ctk.CTkLabel(
-            box,
-            text=f"Connected to MySQL (`speakwise`)  •  Total Users: {stats['users']}  •  Total Sessions: {stats['sessions']}  •  Total Takes: {stats['takes']}",
-            font=ctk.CTkFont(size=12),
+        metrics = ctk.CTkFrame(page, fg_color="transparent")
+        metrics.pack(fill="x", pady=(0, 14))
+        for icon, label, value in (
+            ("?", "Registered users", stats.get("users", 0)),
+            ("?", "Practice sessions", stats.get("sessions", 0)),
+            ("?", "Recorded takes", stats.get("takes", 0)),
+        ):
+            metric = ctk.CTkFrame(
+                metrics,
+                fg_color=CARD_BG,
+                corner_radius=12,
+                border_width=1,
+                border_color=CARD_BORDER,
+            )
+            metric.pack(side="left", fill="x", expand=True, padx=(0, 10))
+            metric.grid_columnconfigure(1, weight=1)
+            ctk.CTkLabel(
+                metric,
+                text=icon,
+                width=56,
+                height=50,
+                corner_radius=10,
+                fg_color="#172825",
+                text_color=COLOR_CYAN,
+                font=ctk.CTkFont(size=23, weight="bold"),
+            ).grid(row=0, column=0, rowspan=2, padx=(14, 16), pady=12)
+            ctk.CTkLabel(
+                metric,
+                text=str(value),
+                font=ctk.CTkFont(size=24, weight="bold"),
+                text_color=COLOR_CYAN,
+            ).grid(row=0, column=1, sticky="sw", pady=(11, 0))
+            ctk.CTkLabel(
+                metric,
+                text=label,
+                font=ctk.CTkFont(size=12),
+                text_color=TEXT_MUTED,
+            ).grid(row=1, column=1, sticky="nw", pady=(0, 11))
+
+        table_names = get_database_tables(db_name)
+        preferred = [name for name in ("users", "sessions", "takes") if name in table_names]
+        if not preferred:
+            preferred = table_names
+        if self.admin_table not in preferred and preferred:
+            self.admin_table = preferred[0]
+
+        selector = ctk.CTkFrame(page, fg_color="#1c1719", corner_radius=10, border_width=1, border_color=CARD_BORDER)
+        selector.pack(anchor="center", pady=(0, 10))
+        for table_name in preferred:
+            selected = table_name == self.admin_table
+            ctk.CTkButton(
+                selector,
+                text=table_name,
+                width=110,
+                height=38,
+                corner_radius=8,
+                fg_color=ACCENT_BLUE if selected else "transparent",
+                hover_color="#008f77" if selected else CARD_HOVER,
+                text_color="#191516" if selected else TEXT_WHITE,
+                font=ctk.CTkFont(size=13, weight="bold" if selected else "normal"),
+                command=lambda name=table_name: self._select_admin_table(name),
+            ).pack(side="left", padx=3, pady=3)
+
+        panel = ctk.CTkFrame(page, fg_color=CARD_BG, corner_radius=14, border_width=1, border_color=CARD_BORDER)
+        panel.pack(fill="x", expand=False)
+        panel.grid_columnconfigure(0, weight=1)
+
+        columns, rows = get_table_data(self.admin_table, db_name=db_name, limit=None)
+        if self.admin_table == "users":
+            count_by_user = {
+                int(item["user_id"]): item.get("session_count", 0)
+                for item in get_all_users()
+                if item.get("user_id") is not None
+            }
+            rows = [dict(row, session_count=count_by_user.get(int(row["user_id"]), 0)) for row in rows]
+
+        query = self.admin_search.strip().casefold()
+        if query:
+            rows = [
+                row for row in rows
+                if any(
+                    query in str(value).casefold()
+                    for key, value in row.items()
+                    if "password" not in key.casefold() and value is not None
+                )
+            ]
+
+        total_rows = len(rows)
+        page_size = 10
+        total_pages = max(1, (total_rows + page_size - 1) // page_size)
+        self.admin_page_number = min(max(1, self.admin_page_number), total_pages)
+        start_index = (self.admin_page_number - 1) * page_size
+        visible_rows = rows[start_index:start_index + page_size]
+
+        tools_row = ctk.CTkFrame(panel, fg_color="transparent")
+        tools_row.grid(row=0, column=0, sticky="ew", padx=18, pady=(14, 10))
+        ctk.CTkLabel(
+            tools_row,
+            text=f"{self.admin_table} ? {total_rows} records ? showing all records",
+            font=ctk.CTkFont(size=13, weight="bold"),
             text_color=COLOR_CYAN,
+        ).pack(side="left")
+        search_box = ctk.CTkFrame(tools_row, fg_color="#181315", corner_radius=8, border_width=1, border_color=CARD_BORDER)
+        search_box.pack(side="right")
+        search_entry = ctk.CTkEntry(
+            search_box,
+            width=300,
+            height=36,
+            placeholder_text=f"Search {self.admin_table}...",
+            fg_color="transparent",
+            border_width=0,
+            text_color=TEXT_WHITE,
         )
-        sub.pack(anchor="w", padx=20, pady=(0, 16))
+        search_entry.pack(side="left", padx=(10, 4))
+        if self.admin_search:
+            search_entry.insert(0, self.admin_search)
+        ctk.CTkButton(
+            search_box,
+            text="?",
+            width=36,
+            height=32,
+            fg_color="transparent",
+            hover_color=CARD_HOVER,
+            text_color=COLOR_CYAN,
+            command=lambda: self._search_admin_table(search_entry.get()),
+        ).pack(side="right", padx=3, pady=2)
+        search_entry.bind("<Return>", lambda _event: self._search_admin_table(search_entry.get()))
 
-        tbl_frame = ctk.CTkScrollableFrame(box, fg_color="#181315", corner_radius=10)
-        tbl_frame.pack(fill="both", expand=True, padx=20, pady=(0, 16))
+        if self.admin_table == "users":
+            display_columns = [
+                ("User ID", "user_id"), ("Name", "name"), ("Email", "email"),
+                ("Session Count", "session_count"),
+            ]
+        else:
+            display_columns = [(column.replace("_", " ").title(), column) for column in columns]
+        excluded_columns = {"created_at", "transcription", "report", "password"}
+        display_columns = [
+            (label, key) for label, key in display_columns
+            if key.casefold() not in excluded_columns
+            and (key in columns or key == "session_count")
+        ]
+        display_columns = [
+            ("Speaking Time (s)" if key.casefold() == "speaking_time" else label, key)
+            for label, key in display_columns
+        ]
+        headers = [("#", None), *display_columns]
+        visible_grid_height = min(500, 38 + max(1, len(visible_rows)) * 44)
+        grid = ctk.CTkScrollableFrame(
+            panel, fg_color="#181315", corner_radius=10, height=visible_grid_height
+        )
+        grid.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 8))
+        grid.grid_columnconfigure(0, weight=0, minsize=42)
+        for column_index, (label, _key) in enumerate(headers):
+            grid.grid_columnconfigure(column_index, weight=0 if label == "#" else 1)
+            if label == "#":
+                grid.grid_columnconfigure(column_index, minsize=48)
+            elif self.admin_table == "users" and label == "Email":
+                grid.grid_columnconfigure(column_index, minsize=220, weight=2)
+            elif self.admin_table == "users" and label == "Name":
+                grid.grid_columnconfigure(column_index, minsize=150)
+            elif self.admin_table == "users" and label == "Session Count":
+                grid.grid_columnconfigure(column_index, minsize=120)
+            elif label.casefold().startswith("speaking time"):
+                grid.grid_columnconfigure(column_index, minsize=140)
+            ctk.CTkLabel(
+                grid,
+                text=label,
+                height=34,
+                fg_color="#221c1e",
+                text_color=TEXT_WHITE,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                anchor="center",
+            ).grid(row=0, column=column_index, sticky="ew", padx=1, pady=1)
 
-        h_row = ctk.CTkFrame(tbl_frame, fg_color="#221c1e", corner_radius=6)
-        h_row.pack(fill="x", pady=2, ipady=4)
-        ctk.CTkLabel(h_row, text="User ID", width=70, font=ctk.CTkFont(weight="bold", size=12), text_color=COLOR_CYAN).pack(side="left", padx=4)
-        ctk.CTkLabel(h_row, text="Name", width=180, font=ctk.CTkFont(weight="bold", size=12), text_color=TEXT_WHITE, anchor="w").pack(side="left", padx=4)
-        ctk.CTkLabel(h_row, text="Email", width=240, font=ctk.CTkFont(weight="bold", size=12), text_color=TEXT_WHITE, anchor="w").pack(side="left", padx=4)
-        ctk.CTkLabel(h_row, text="Sessions", width=80, font=ctk.CTkFont(weight="bold", size=12), text_color=COLOR_CYAN).pack(side="left", padx=4)
+        for visible_index, row in enumerate(visible_rows):
+            grid_row = visible_index + 1
+            row_bg = CARD_BG if visible_index % 2 == 0 else "#1e191b"
+            values = [str(start_index + visible_index + 1)]
+            values.extend("[hidden]" if "password" in key.casefold() else str(row.get(key) if row.get(key) is not None else "?") for _label, key in display_columns)
+            for column_index, ((label, key), value) in enumerate(zip(headers, values)):
+                if key and "password" in key.casefold():
+                    value = "[hidden]"
+                else:
+                    value = value if len(value) <= 72 else value[:69] + "..."
+                ctk.CTkLabel(
+                    grid,
+                    text=value,
+                    height=44,
+                    fg_color=row_bg,
+                    text_color=TEXT_WHITE if key not in (None, "session_count") else TEXT_MUTED,
+                    font=ctk.CTkFont(size=11),
+                    anchor="center",
+                    justify="center",
+                    wraplength=240,
+                ).grid(row=grid_row, column=column_index, sticky="nsew", padx=1, pady=1)
 
-        users = get_all_users()
-        for u in users:
-            u_row = ctk.CTkFrame(tbl_frame, fg_color="transparent")
-            u_row.pack(fill="x", pady=2, ipady=3)
-            ctk.CTkLabel(u_row, text=f"#{u['user_id']}", width=70, font=ctk.CTkFont(size=12), text_color=COLOR_CYAN).pack(side="left", padx=4)
-            ctk.CTkLabel(u_row, text=u['name'], width=180, font=ctk.CTkFont(size=12), text_color=TEXT_WHITE, anchor="w").pack(side="left", padx=4)
-            ctk.CTkLabel(u_row, text=u['email'], width=240, font=ctk.CTkFont(size=12), text_color=TEXT_MUTED, anchor="w").pack(side="left", padx=4)
-            ctk.CTkLabel(u_row, text=str(u['session_count']), width=80, font=ctk.CTkFont(size=12), text_color=COLOR_TEAL).pack(side="left", padx=4)
+        if not visible_rows:
+            ctk.CTkLabel(
+                grid,
+                text="No matching records.",
+                height=76,
+                text_color=TEXT_MUTED,
+            ).grid(row=1, column=0, columnspan=len(headers), sticky="ew", padx=10)
 
-        btn_close = ctk.CTkButton(box, text="Close", font=ctk.CTkFont(size=13), fg_color="#221c1e", hover_color=CARD_HOVER, command=modal.destroy, height=36)
-        btn_close.pack(anchor="e", padx=20, pady=(0, 16))
+        footer = ctk.CTkFrame(panel, fg_color="transparent")
+        footer.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 14))
+        first_record = start_index + 1 if total_rows else 0
+        last_record = min(start_index + page_size, total_rows)
+        ctk.CTkLabel(
+            footer,
+            text=f"Showing {first_record} to {last_record} of {total_rows} records",
+            font=ctk.CTkFont(size=12),
+            text_color=TEXT_MUTED,
+        ).pack(side="left")
+        pager = ctk.CTkFrame(footer, fg_color="transparent")
+        pager.pack(side="right")
+        ctk.CTkButton(
+            pager, text="\u2039", width=38, height=36,
+            fg_color="#2b2326" if self.admin_page_number > 1 else "#201b1d",
+            text_color=TEXT_WHITE if self.admin_page_number > 1 else TEXT_SUBTLE,
+            command=lambda: self._change_admin_page(-1),
+        ).pack(side="left", padx=3)
+        ctk.CTkLabel(
+            pager,
+            text=str(self.admin_page_number),
+            width=38,
+            height=36,
+            corner_radius=8,
+            fg_color=ACCENT_BLUE,
+            text_color="#191516",
+            font=ctk.CTkFont(size=12, weight="bold"),
+        ).pack(side="left", padx=3)
+        ctk.CTkButton(
+            pager, text="\u203a", width=38, height=36,
+            fg_color="#2b2326" if self.admin_page_number < total_pages else "#201b1d",
+            text_color=TEXT_WHITE if self.admin_page_number < total_pages else TEXT_SUBTLE,
+            command=lambda: self._change_admin_page(1),
+        ).pack(side="left", padx=3)
+
+    def _select_admin_table(self, table_name):
+        self.admin_table = table_name
+        self.admin_page_number = 1
+        self.admin_search = ""
+        self._render_admin_page()
+
+    def _search_admin_table(self, query):
+        self.admin_search = query.strip()
+        self.admin_page_number = 1
+        self._render_admin_page()
+
+    def _change_admin_page(self, offset):
+        self.admin_page_number = max(1, self.admin_page_number + offset)
+        self._render_admin_page()
+
+    def _open_database_inspector(self):
+        """Navigate to the database browser, which requires admin sign-in."""
+        self.show_page("admin")
 
     def _create_settings_view(self):
         frame = ctk.CTkFrame(self.pages_container, fg_color="transparent")

@@ -1,10 +1,13 @@
 import os
 import re
 import warnings
+import logging
 
 import torch
 from crisperwhisper import CrisperWhisperModel
 from audio_text import get_audio_stats
+
+logger = logging.getLogger(__name__)
 
 warnings.filterwarnings(
     "ignore",
@@ -68,8 +71,9 @@ def transcribe_audio_detailed(audio_file):
 
     try:
         audio_stats = get_audio_stats(audio_file)
-        # Use a conservative hard-silence gate. The looser speech detector is
-        # useful for diagnostics, but can reject quiet voices before ASR sees them.
+        if audio_stats.get("error"):
+            return {"text": "", "status": "failed", "error": audio_stats["error"],
+                    "audio_diagnostics": audio_stats}
         if audio_stats["duration"] <= 0 or (
             audio_stats["max_amplitude"] < 0.005 and audio_stats["mean_rms"] < 0.0005
         ):
@@ -77,7 +81,7 @@ def transcribe_audio_detailed(audio_file):
                     "audio_diagnostics": audio_stats}
         silence_check_error = None
     except Exception as error:
-        # Let ASR make the decision if acoustic validation itself is unavailable.
+        logger.exception("Audio diagnostics failed for %s", audio_file)
         audio_stats = None
         silence_check_error = str(error)
 
@@ -92,8 +96,13 @@ def transcribe_audio_detailed(audio_file):
         return {"text": cleaned_text, "status": "success", "error": None,
                 "audio_diagnostics": audio_stats}
     except Exception as error:
+        logger.exception("Transcription failed for %s", audio_file)
         return {"text": "", "status": "failed", "error": str(error),
                 "diagnostic": silence_check_error}
+
+
+def count_words(text):
+    return len(re.findall(r"[^\W_]+(?:['’][^\W_]+)*", text or "", flags=re.UNICODE))
 
 
 def _clean_transcription(text):

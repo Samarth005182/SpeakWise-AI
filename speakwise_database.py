@@ -10,7 +10,9 @@ load_dotenv()
 def ensure_database_exists():
     host = os.getenv("DB_HOST", "localhost")
     user = os.getenv("DB_USER", "root")
-    password = os.getenv("DB_PASSWORD", "samarth597")
+    password = os.getenv("DB_PASSWORD")
+    if password is None:
+        raise RuntimeError("DB_PASSWORD is not configured. Set it in your environment or .env file.")
     db_name = os.getenv("DB_NAME", "speakwise")
 
     conn = None
@@ -39,7 +41,9 @@ def ensure_database_exists():
 def get_connection(db_name=None):
     host = os.getenv("DB_HOST", "localhost")
     user = os.getenv("DB_USER", "root")
-    password = os.getenv("DB_PASSWORD", "samarth597")
+    password = os.getenv("DB_PASSWORD")
+    if password is None:
+        raise RuntimeError("DB_PASSWORD is not configured. Set it in your environment or .env file.")
     target_db = os.getenv("DB_NAME", "speakwise") if db_name is None else db_name
 
     try:
@@ -120,47 +124,6 @@ def setup_tables():
         db.close()
 
 
-def seed_admin():
-    admin_name = "Admin"
-    admin_email = "admin@speakwise.ai"
-    admin_password = "admin"
-
-    db = None
-    cursor = None
-    try:
-        db = get_connection()
-        cursor = db.cursor(buffered=True)
-
-        cursor.execute(
-            "SELECT user_id FROM users WHERE LOWER(TRIM(email)) = %s OR LOWER(TRIM(name)) = 'admin'",
-            (admin_email.lower(),),
-        )
-        row = cursor.fetchone()
-        password_hash = bcrypt.hashpw(
-            admin_password.encode("utf-8"), bcrypt.gensalt()
-        ).decode("utf-8")
-
-        if row:
-            cursor.execute(
-                "UPDATE users SET password = %s, name = %s WHERE user_id = %s",
-                (password_hash, admin_name, row[0]),
-            )
-        else:
-            cursor.execute(
-                "INSERT INTO users (name, email, password) VALUES (%s, %s, %s)",
-                (admin_name, admin_email.lower(), password_hash),
-            )
-        db.commit()
-    except Exception:
-        pass
-    finally:
-        if cursor:
-            cursor.close()
-        if db:
-            db.close()
-
-
-
 def register_user(name, email, password):
     clean_name = (name or "").strip()
     clean_email = (email or "").strip().lower()
@@ -222,37 +185,6 @@ def authenticate_user(identifier, password):
     if not clean_id or not clean_pw:
         return False, "Identifier and password cannot be empty."
 
-    # Hidden admin login support: username "admin" and password "admin"
-    if clean_id.lower() in ("admin", "admin@speakwise.ai") and clean_pw == "admin":
-        seed_admin()
-        admin_id = 1
-        db = None
-        cursor = None
-        try:
-            db = get_connection()
-            cursor = db.cursor(dictionary=True)
-            cursor.execute(
-                "SELECT user_id, name, email FROM users WHERE LOWER(TRIM(email)) = 'admin@speakwise.ai' OR LOWER(TRIM(name)) = 'admin' LIMIT 1"
-            )
-            admin_user = cursor.fetchone()
-            if admin_user:
-                admin_id = admin_user["user_id"]
-        except Exception:
-            pass
-        finally:
-            if cursor:
-                cursor.close()
-            if db:
-                db.close()
-
-        return True, {
-            "user_id": admin_id,
-            "name": "Admin",
-            "email": "admin@speakwise.ai",
-            "role": "Administrator",
-            "is_admin": True,
-        }
-
     db = None
     cursor = None
     try:
@@ -275,16 +207,12 @@ def authenticate_user(identifier, password):
             return False, f"No account found matching '{clean_id}'."
 
         if bcrypt.checkpw(clean_pw.encode("utf-8"), user["password"].encode("utf-8")):
-            is_admin = (
-                user["email"].lower() == "admin@speakwise.ai"
-                or user["name"].lower() == "admin"
-            )
             return True, {
                 "user_id": user["user_id"],
                 "name": user["name"],
                 "email": user["email"],
-                "role": "Administrator" if is_admin else "Student",
-                "is_admin": is_admin,
+                "role": "Student",
+                "is_admin": False,
             }
         else:
             return False, "Incorrect password. Please try again."
@@ -552,7 +480,8 @@ def get_table_data(table_name, db_name="speakwise", limit=300, search_query=None
                 order_by = f"ORDER BY `{col}` DESC"
                 break
 
-        query = f"SELECT * FROM `{table_name}` {order_by} LIMIT {int(limit)}"
+        limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
+        query = f"SELECT * FROM `{table_name}` {order_by} {limit_clause}"
         cursor.execute(query)
         rows = cursor.fetchall()
 
@@ -622,7 +551,6 @@ def delete_table_record(table_name, primary_key_col, primary_key_val, db_name="s
 
 def initialize_database():
     setup_tables()
-    seed_admin()
 
 
 if __name__ == "__main__":

@@ -14,6 +14,25 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+Configure MySQL credentials in a local `.env` file before starting the app:
+
+```text
+DB_HOST=localhost
+DB_USER=root
+DB_PASSWORD=your_mysql_password
+DB_NAME=speakwise
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=your_admin_password
+```
+
+The database password has no built-in default. The app will create its tables
+on first run when the configured MySQL account has permission to create the
+database. The Admin page uses the separate `ADMIN_USERNAME` and
+`ADMIN_PASSWORD` values and displays database tables after sign-in.
+Regular account sign-in is remembered on this computer until the user signs
+out or deletes the account. The local session file stores only the account ID,
+not the account password, and is excluded from Git.
+
 For fast NVIDIA GPU transcription, install the CUDA-compatible PyTorch build
 from the [official PyTorch selector](https://pytorch.org/get-started/locally/).
 The application automatically uses CUDA with FP16 when it is available and

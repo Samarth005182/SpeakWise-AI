@@ -1,5 +1,6 @@
 import os
 import logging
+from collections import Counter
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["GLOG_minloglevel"] = "3"
@@ -32,7 +33,7 @@ VIDEO_FILE = "myrecording.avi"
 MODEL_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "face_landmarker.task")
 
 
-CALIBRATION_SECONDS = 2.0
+CALIBRATION_SECONDS = 3.0
 SMOOTHING_WINDOW = 5
 MIN_STATE_DURATION = 0.35
 
@@ -76,6 +77,7 @@ class FrameResult:
 
     is_blinking: bool = False
     state: str = "face_missing"
+    processing_error: str | None = None
 
 
 
@@ -377,7 +379,10 @@ def classify_face(
     calibration,
 ):
     if not frame.face_detected:
-        return "face_missing"
+        return "tracking_error" if frame.processing_error else "face_missing"
+
+    if any(value is None for value in (frame.left_x, frame.left_y, frame.right_x, frame.right_y)):
+        return "gaze_unavailable"
 
 
     yaw_difference = 0.0
@@ -407,7 +412,7 @@ def classify_face(
         return "head_turned"
 
     if getattr(frame, "is_blinking", False):
-        return "camera_contact"
+        return "blink"
 
 
     left_dx = 0.0
@@ -497,7 +502,7 @@ def smooth_states(frames):
 
         run_length = j - i
 
-        if run_length < minimum_frames:
+        if run_length < minimum_frames and states[i] not in {"blink", "gaze_unavailable", "tracking_error", "face_missing"}:
 
             previous_state = (
                 states[i - 1]
@@ -553,6 +558,8 @@ def get_video_information(video_file):
 
     cap.release()
 
+    if frame_count <= 0 or width <= 0 or height <= 0:
+        raise RuntimeError(f"Video contains no usable frames: {video_file}")
     if fps <= 0:
         fps = 30.0
 
@@ -646,8 +653,9 @@ def process_video(
                     timestamp_ms,
                 )
 
-            except Exception:
-
+            except Exception as error:
+                logger.exception("MediaPipe failed on video frame %s", frame_index)
+                frame_result.processing_error = str(error)
                 result = None
 
 
@@ -898,7 +906,10 @@ def calculate_eye_contact(frames):
         if delta <= 0 or delta > 0.5:
             delta = 1.0 / 30.0
 
-        if frame.face_detected:
+        gaze_trackable = frame.face_detected and all(
+            value is not None for value in (frame.left_x, frame.left_y, frame.right_x, frame.right_y)
+        )
+        if gaze_trackable and not frame.is_blinking:
             trackable_time += delta
 
         if frame.state == "camera_contact":
@@ -913,6 +924,9 @@ def calculate_eye_contact(frames):
 
             previous_contact = True
 
+        elif frame.state == "blink" and previous_contact:
+            current_streak += delta
+            longest_streak = max(longest_streak, current_streak)
         else:
 
             if previous_contact:
@@ -1020,7 +1034,7 @@ def analyze_video(video_file=None):
 
     if not frames:
 
-        return None
+        return {"analysis_status": "unavailable", "analysis_error": "Video contains no readable frames."}
 
 
     calibration = calibrate(frames)
@@ -1053,7 +1067,11 @@ def analyze_video(video_file=None):
     )
 
 
+    tracking_error_count = sum(bool(frame.processing_error) for frame in frames)
+    status = "partial" if tracking_error_count or not eye_report["face_detected"] or not head_report["face_detected"] else "success"
     return {
+        "analysis_status": status,
+        "analysis_error": f"MediaPipe frame processing failed on {tracking_error_count} frame(s)." if tracking_error_count else None,
         "duration": duration,
 
         "calibration": calibration,

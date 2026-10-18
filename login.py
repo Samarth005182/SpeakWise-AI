@@ -1,13 +1,51 @@
 import json
+import os
+from pathlib import Path
 
 from speakwise_database import (
     authenticate_user,
     delete_user,
+    get_user_by_id,
     get_user_sessions,
     initialize_database,
     register_user,
     save_speech_session,
 )
+
+
+_REMEMBERED_SESSION_FILE = Path(__file__).resolve().parent / ".speakwise_session.json"
+
+
+def remember_user(user):
+    """Persist the account ID locally; never store the user's password."""
+    try:
+        user_id = int(user["user_id"])
+        temp_path = _REMEMBERED_SESSION_FILE.with_suffix(".tmp")
+        temp_path.write_text(json.dumps({"user_id": user_id}), encoding="utf-8")
+        os.replace(temp_path, _REMEMBERED_SESSION_FILE)
+    except (KeyError, TypeError, ValueError, OSError):
+        pass
+
+
+def load_remembered_user():
+    """Restore the remembered account if it still exists in the database."""
+    try:
+        data = json.loads(_REMEMBERED_SESSION_FILE.read_text(encoding="utf-8"))
+        user_id = int(data["user_id"])
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
+
+    user = get_user_by_id(user_id)
+    if user:
+        return user
+    return None
+
+
+def clear_remembered_user():
+    try:
+        _REMEMBERED_SESSION_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def hash_password(password):
@@ -138,10 +176,17 @@ def save_session(user_id, category, topic_name, speaking_time, audio_path, video
 def view_my_sessions(user):
     rows = get_user_sessions(user["user_id"])
     if not rows:
+        print("No saved practice sessions.")
         return
 
     for i, row in enumerate(rows, 1):
-        pass
+        created_at = row.get("created_at")
+        if hasattr(created_at, "strftime"):
+            created_at = created_at.strftime("%Y-%m-%d %H:%M")
+        print(f"{i}. {created_at or 'Date unavailable'} — {row.get('topic_name') or 'Untitled topic'}")
+        print(f"   Category: {row.get('category') or 'General'} | Target: {row.get('speaking_time', 0)} seconds")
+        transcription = (row.get("transcription") or "").strip()
+        print(f"   Transcript: {transcription[:240] + ('…' if len(transcription) > 240 else '') if transcription else 'Unavailable'}")
 
 
 def delete_account(user):
@@ -172,8 +217,14 @@ def delete_account(user):
 def authenticate():
     try:
         initialize_database()
-    except Exception:
+    except Exception as error:
+        print(f"Could not initialize the database: {error}")
         return None
+
+    remembered_user = load_remembered_user()
+    if remembered_user:
+        print(f"Welcome back, {remembered_user['name']}.")
+        return remembered_user
 
     while True:
         choice = input().strip()
@@ -181,11 +232,13 @@ def authenticate():
         if choice == "1":
             user = login()
             if user:
+                remember_user(user)
                 return user
 
         elif choice == "2":
             user = register()
             if user:
+                remember_user(user)
                 return user
 
         elif choice in ("3", "exit", "e", "q", "quit"):
